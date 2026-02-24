@@ -1,0 +1,260 @@
+.TH YELO 1 "2026-02-15" "yelo" "User Commands"
+.SH NAME
+yelo \- S3/Glacier CLI with FTP-style navigation
+.SH SYNOPSIS
+.B yelo
+.RI [ flags ]
+.I command
+.RI [ args ]
+.SH DESCRIPTION
+.B yelo
+is a command-line tool for working with Amazon S3 and Glacier storage.
+It provides FTP-style directory navigation with persistent state,
+pipe-friendly output, and built-in Glacier restore workflows.
+.PP
+Paths use FTP conventions:
+.B /foo
+is absolute,
+.B foo
+is relative to the current working directory, and
+.B ..
+navigates up one level.
+The working directory (bucket + prefix) persists between invocations.
+.PP
+When stdout is a terminal,
+.B yelo
+produces human-readable output with aligned columns, human-friendly sizes,
+and progress bars.
+When stdout is piped, output switches to bare keys (one per line) or
+tab-separated fields suitable for
+.BR grep (1),
+.BR cut (1),
+.BR awk (1),
+and
+.BR xargs (1).
+Progress bars and status messages are always written to stderr.
+.SH GLOBAL FLAGS
+.TP
+.BI \-\-bucket " NAME"
+S3 bucket to operate on.
+Overrides the bucket from state and config.
+.TP
+.BI \-\-region " REGION"
+AWS region.
+Overrides per-bucket and global config values.
+.TP
+.BI \-\-profile " PROFILE"
+AWS credentials profile.
+Overrides per-bucket and global config values.
+.TP
+.BI \-\-config " PATH"
+Path to config file.
+Defaults to
+.IR ~/.config/yelo/config.yaml .
+.SH COMMANDS
+.SS ls \fR[\fIflags\fR] [\fIpath\fR]
+List objects and prefixes under
+.I path
+(or the current working directory).
+.TP
+.B \-l
+Long format.
+In a terminal, shows storage class, human-readable size, date, and key
+in aligned columns.
+When piped, outputs tab-separated fields:
+key, size in bytes, storage class, date.
+.TP
+.B \-R
+Recursive.
+List all objects under the prefix, not just the immediate level.
+.PP
+When piped without
+.BR \-l ,
+outputs bare object keys, one per line.
+.SS get \fIremote\fR [\fIlocal\fR]
+Download an object.
+.PP
+.I remote
+is resolved against the current working directory.
+.I local
+defaults to the basename of the remote key.
+If
+.I local
+is
+.BR \- ,
+the object contents are written to stdout.
+.PP
+Before downloading, checks if the object is in Glacier or Deep Archive
+storage and reports whether a restore is needed or in progress.
+A progress bar is shown on stderr when the terminal is interactive.
+.SS put \fR[\fIflags\fR] \fIlocal\fR [\fIremote\fR]
+Upload a local file to S3.
+.PP
+.I remote
+defaults to the current prefix plus the local filename.
+.TP
+.BI \-\-storage\-class " CLASS"
+S3 storage class.
+Defaults to
+.BR DEEP_ARCHIVE .
+Common values:
+.BR STANDARD ,
+.BR STANDARD_IA ,
+.BR GLACIER ,
+.BR DEEP_ARCHIVE .
+.SS restore \fR[\fIflags\fR] \fIpath\fR
+Initiate a Glacier restore for an archived object.
+.PP
+If the object is already restored or a restore is in progress,
+reports the current status and exits without error.
+Refuses to use Expedited tier with DEEP_ARCHIVE storage.
+.TP
+.BI \-\-days " N"
+Number of days to keep the restored copy accessible.
+Defaults to
+.BR 7 .
+.TP
+.BI \-\-tier " TIER"
+Retrieval tier:
+.BR Standard ,
+.BR Bulk ,
+or
+.BR Expedited .
+Defaults to
+.BR Standard .
+.SS stat \fIpath\fR
+Show metadata for an object, including key, size, storage class,
+last modified date, content type, ETag, and restore status (if applicable).
+.PP
+In a terminal, displays labeled key-value pairs.
+When piped, outputs
+.IB key = value
+pairs, one per line.
+.SS buckets \fR[\fIsubcommand\fR]
+Manage configured S3 buckets.
+The default subcommand is
+.BR list .
+.TP
+.B buckets list \fR[\fB\-\-remote\fR]
+Show configured buckets.
+The default bucket is marked with
+.BR * .
+With
+.B \-\-remote
+(or when no buckets are configured), queries AWS and lists all buckets
+in the account.
+.TP
+.B buckets add \fIname\fR \fR[\fB\-\-region\fR \fIREGION\fR] [\fB\-\-profile\fR \fIPROFILE\fR]
+Add or update a bucket in the config.
+.TP
+.B buckets remove \fIname\fR
+Remove a bucket from the config.
+If the removed bucket was the active bucket in state, the state is cleared.
+.TP
+.B buckets default \fR[\fIname\fR]
+With no argument, print the current default bucket.
+With
+.IR name ,
+set it as the default.
+.SS cd \fIpath\fR
+Set the working directory (S3 prefix).
+.PP
+Supports
+.BI bucket : path
+syntax to switch both bucket and prefix at once.
+The new path is printed to stderr.
+State is persisted to
+.IR ~/.config/yelo/state.json .
+.SS pwd
+Print the current bucket and prefix in
+.IB bucket :/ prefix /
+format.
+.SH BUCKET RESOLUTION
+When a command needs a bucket, it is resolved in this order:
+.IP 1. 3
+.B \-\-bucket
+flag
+.IP 2. 3
+Bucket from state (set by
+.BR cd )
+.IP 3. 3
+Default bucket from config
+.IP 4. 3
+The only configured bucket (if exactly one exists)
+.SH PATH RESOLUTION
+Paths are resolved FTP-style against the current working directory prefix:
+.IP \(bu 2
+.B /photos/2024
+\(em absolute, resolves to
+.B photos/2024
+.IP \(bu 2
+.B vacation
+\(em relative, joined to the current prefix
+.IP \(bu 2
+.B ..
+\(em navigate up one directory level
+.IP \(bu 2
+.B .
+\(em current directory (no-op)
+.PP
+S3 keys never start with
+.BR / ;
+it is stripped internally.
+A trailing
+.B /
+is appended where a prefix (directory) is expected.
+.SH PIPE EXAMPLES
+List all tar files:
+.PP
+.RS
+.nf
+yelo ls -R | grep \\.tar
+.fi
+.RE
+.PP
+Download every object matching a pattern:
+.PP
+.RS
+.nf
+yelo ls | grep backup | xargs -I{} yelo get {}
+.fi
+.RE
+.PP
+Pipe an object directly to another command:
+.PP
+.RS
+.nf
+yelo get data.csv - | wc -l
+.fi
+.RE
+.PP
+Tab-separated listing for processing:
+.PP
+.RS
+.nf
+yelo ls -l | awk -F'\\t' '$2 > 1000000 {print $1}'
+.fi
+.RE
+.SH FILES
+.TP
+.I ~/.config/yelo/config.yaml
+User configuration.
+Contains bucket definitions (name, region, profile), the default bucket,
+and global region/profile settings.
+.TP
+.I ~/.config/yelo/state.json
+Transient session state.
+Tracks the current bucket and prefix set by
+.BR cd .
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+An error occurred.
+Diagnostic messages are printed to stderr.
+.SH SEE ALSO
+.BR aws (1),
+.BR s3cmd (1),
+.BR rclone (1)

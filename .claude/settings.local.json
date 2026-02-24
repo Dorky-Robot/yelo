@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go build:*)",
+      "Bash(go get:*)",
+      "Bash(./yelo help:*)",
+      "Bash(./yelo cd:*)",
+      "Bash(./yelo pwd:*)",
+      "Bash(./yelo cd photos)",
+      "Bash(./yelo cd ..)",
+      "Bash(go vet:*)",
+      "Bash(go mod tidy:*)",
+      "Bash(mandoc -Tlint:*)",
+      "Bash(groff:*)",
+      "Bash(gh api:*)"
+    ]
+  }
+}
