@@ -4,21 +4,22 @@ import "testing"
 
 func TestIsGlacierClass(t *testing.T) {
 	tests := []struct {
+		name  string
 		class string
 		want  bool
 	}{
-		{"GLACIER", true},
-		{"DEEP_ARCHIVE", true},
-		{"GLACIER_IR", true},
-		{"STANDARD", false},
-		{"STANDARD_IA", false},
-		{"INTELLIGENT_TIERING", false},
-		{"ONEZONE_IA", false},
-		{"", false},
+		{"glacier", "GLACIER", true},
+		{"deep archive", "DEEP_ARCHIVE", true},
+		{"glacier ir", "GLACIER_IR", true},
+		{"standard", "STANDARD", false},
+		{"standard ia", "STANDARD_IA", false},
+		{"intelligent tiering", "INTELLIGENT_TIERING", false},
+		{"onezone ia", "ONEZONE_IA", false},
+		{"empty", "", false},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.class, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			got := isGlacierClass(tt.class)
 			if got != tt.want {
 				t.Errorf("isGlacierClass(%q) = %v, want %v", tt.class, got, tt.want)
@@ -54,27 +55,3 @@ func TestParseBucketPath(t *testing.T) {
 	}
 }
 
-func TestFormatSize(t *testing.T) {
-	tests := []struct {
-		name  string
-		bytes int64
-		want  string
-	}{
-		{"zero", 0, "0 B"},
-		{"bytes", 512, "512 B"},
-		{"one KB", 1024, "1.0 KB"},
-		{"1.5 KB", 1536, "1.5 KB"},
-		{"one MB", 1024 * 1024, "1.0 MB"},
-		{"one GB", 1024 * 1024 * 1024, "1.0 GB"},
-		{"one TB", 1024 * 1024 * 1024 * 1024, "1.0 TB"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := formatSize(tt.bytes)
-			if got != tt.want {
-				t.Errorf("formatSize(%d) = %q, want %q", tt.bytes, got, tt.want)
-			}
-		})
-	}
-}

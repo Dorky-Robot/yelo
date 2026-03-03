@@ -9,7 +9,7 @@ You are orchestrating the full ship workflow: push → PR → review-fix loop �
 Check the current branch with `git branch --show-current`.
 
 - If on `main`, you need to create a feature branch. Analyze the staged/unstaged changes and recent work to derive a good branch name (e.g., `feat/add-tests`, `fix/glacier-validation`). If `$ARGUMENTS` contains a branch name hint, use it. Then:
-  1. Create and switch to the feature branch: `git checkout -b <branch-name>`
+  1. Create and switch to the feature branch: `git checkout -b "<branch-name>"`
   2. Continue to Step 2.
 - If already on a feature branch, continue.
 

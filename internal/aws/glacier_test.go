@@ -41,6 +41,7 @@ func TestValidateTier(t *testing.T) {
 		{"deep archive bulk ok", "DEEP_ARCHIVE", types.TierBulk, false},
 		{"glacier expedited ok", "GLACIER", types.TierExpedited, false},
 		{"glacier standard ok", "GLACIER", types.TierStandard, false},
+		{"glacier ir expedited ok", "GLACIER_IR", types.TierExpedited, false},
 		{"standard expedited ok", "STANDARD", types.TierExpedited, false},
 	}
 

@@ -95,7 +95,7 @@ func TestListObjects(t *testing.T) {
 		var buf bytes.Buffer
 		ListObjects(&buf, objects, true, true)
 		got := buf.String()
-		// tabwriter output — verify key content is present
+		// tabwriter output — verify key content and metadata fields are present
 		if got == "" {
 			t.Error("expected non-empty output")
 		}
@@ -104,6 +104,13 @@ func TestListObjects(t *testing.T) {
 			if !bytes.Contains([]byte(got), []byte(obj.Key)) {
 				t.Errorf("output missing key %q", obj.Key)
 			}
+		}
+		// Check that human-readable size and truncated date appear
+		if !bytes.Contains([]byte(got), []byte("1.0 KB")) {
+			t.Error("output missing formatted size '1.0 KB'")
+		}
+		if !bytes.Contains([]byte(got), []byte("2024-01-15")) {
+			t.Error("output missing formatted date '2024-01-15'")
 		}
 	})
 
@@ -142,7 +149,7 @@ func TestFormatStat(t *testing.T) {
 		var buf bytes.Buffer
 		FormatStat(&buf, obj, false)
 		got := buf.String()
-		expects := []string{"key=photos/cat.jpg", "size=2048", "class=STANDARD", "type=image/jpeg", "etag="}
+		expects := []string{"key=photos/cat.jpg", "size=2048", "class=STANDARD", "modified=", "type=image/jpeg", "etag="}
 		for _, e := range expects {
 			if !bytes.Contains([]byte(got), []byte(e)) {
 				t.Errorf("pipe output missing %q", e)

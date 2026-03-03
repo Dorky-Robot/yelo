@@ -23,6 +23,7 @@ func TestResolvePath(t *testing.T) {
 		{"trailing slash stripped", "foo", "bar/", "foo/bar"},
 		{"absolute with trailing slash", "", "/foo/bar/", "foo/bar"},
 		{"parent from deep", "a/b/c/d", "../..", "a/b"},
+		{"parent from root stays at root", "", "..", ""},
 	}
 
 	for _, tt := range tests {
