@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 
+	"github.com/dorkyrobot/yelo/internal/aws"
 	tuiapp "github.com/dorkyrobot/yelo/internal/tui/app"
 )
 
@@ -11,13 +12,13 @@ func init() {
 }
 
 func runTUI(env *Env, args []string) error {
-	bucket, err := env.ResolveBucket()
-	if err != nil {
-		return err
-	}
+	bucket, _ := env.ResolveBucket()
 
+	// Build a client even without a bucket — use global region/profile.
 	ctx := context.Background()
-	client, err := env.NewS3Client(ctx)
+	region := env.Cfg.ResolveRegion(env.Opts.Region, bucket)
+	profile := env.Cfg.ResolveProfile(env.Opts.Profile, bucket)
+	client, err := aws.NewClient(ctx, region, profile)
 	if err != nil {
 		return err
 	}

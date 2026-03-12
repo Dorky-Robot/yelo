@@ -11,6 +11,9 @@ import (
 	"github.com/dorkyrobot/yelo/internal/state"
 )
 
+// Version is set at build time via -ldflags.
+var Version = "dev"
+
 type GlobalOpts struct {
 	Bucket  string
 	Region  string
@@ -60,13 +63,20 @@ func register(name string, run func(env *Env, args []string) error, usage string
 
 func Execute() error {
 	var opts GlobalOpts
+	var showVersion bool
 	flag.StringVar(&opts.Bucket, "bucket", "", "S3 bucket name")
 	flag.StringVar(&opts.Region, "region", "", "AWS region")
 	flag.StringVar(&opts.Profile, "profile", "", "AWS profile")
 	flag.StringVar(&opts.Config, "config", "", "config file path")
+	flag.BoolVar(&showVersion, "v", false, "print version")
 
 	flag.Usage = func() { printUsage() }
 	flag.Parse()
+
+	if showVersion {
+		fmt.Printf("yelo %s\n", Version)
+		return nil
+	}
 
 	args := flag.Args()
 	if len(args) == 0 {
@@ -88,6 +98,11 @@ func Execute() error {
 
 	if name == "help" {
 		printUsage()
+		return nil
+	}
+
+	if name == "version" {
+		fmt.Printf("yelo %s\n", Version)
 		return nil
 	}
 

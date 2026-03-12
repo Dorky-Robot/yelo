@@ -65,18 +65,29 @@ func NewModel(cfg *config.Config, st *state.State, client aws.S3Client, bucket s
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(colorTitle)
 
-	return Model{
-		cfg:    cfg,
-		state:  st,
-		client: client,
-		bucket: bucket,
-		prefix: st.Prefix,
+	m := Model{
+		cfg:     cfg,
+		state:   st,
+		client:  client,
+		bucket:  bucket,
+		prefix:  st.Prefix,
 		spinner: s,
-		loading: true,
 	}
+
+	if bucket == "" {
+		m.mode = modeBuckets
+	} else {
+		m.loading = true
+	}
+
+	return m
 }
 
 func (m Model) Init() tea.Cmd {
+	if m.bucket == "" {
+		// No bucket configured — go straight to bucket picker.
+		return tea.Batch(m.spinner.Tick, fetchBuckets(m.client))
+	}
 	return tea.Batch(
 		m.spinner.Tick,
 		fetchList(m.client, m.bucket, m.prefix),
