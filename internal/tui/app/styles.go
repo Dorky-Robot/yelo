@@ -1,21 +1,39 @@
 package app
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"github.com/charmbracelet/bubbles/table"
+	"github.com/charmbracelet/lipgloss"
+)
 
-// Color palette — matches tunnels' visual language.
+// Color palette.
 var (
-	cyan   = lipgloss.Color("6")  // Primary action / highlight
-	green  = lipgloss.Color("2")  // Success / running / STANDARD
-	red    = lipgloss.Color("1")  // Danger / DEEP_ARCHIVE
-	yellow = lipgloss.Color("3")  // Warning / restoring
-	dim    = lipgloss.Color("8")  // Secondary / inactive
-	white  = lipgloss.Color("15") // Active input
-	blue   = lipgloss.Color("4")  // GLACIER_IR
-	orange = lipgloss.Color("208") // GLACIER
+	cyan   = lipgloss.Color("6")
+	green  = lipgloss.Color("2")
+	red    = lipgloss.Color("1")
+	yellow = lipgloss.Color("3")
+	dim    = lipgloss.Color("8")
+	white  = lipgloss.Color("15")
+	blue   = lipgloss.Color("4")
+	orange = lipgloss.Color("208")
 
-	// Selection highlight background
 	selectBg = lipgloss.Color("#1e2837")
 )
+
+func tableStyles() table.Styles {
+	s := table.DefaultStyles()
+	s.Header = s.Header.
+		Foreground(cyan).
+		Bold(true).
+		BorderBottom(true).
+		BorderBottomForeground(dim)
+	s.Selected = s.Selected.
+		Background(selectBg).
+		Bold(true).
+		Foreground(lipgloss.NoColor{})
+	s.Cell = s.Cell.
+		Foreground(lipgloss.NoColor{})
+	return s
+}
 
 func storageClassColor(class string) lipgloss.Color {
 	switch class {
@@ -27,8 +45,6 @@ func storageClassColor(class string) lipgloss.Color {
 		return blue
 	case "STANDARD":
 		return green
-	case "STANDARD_IA", "ONEZONE_IA", "INTELLIGENT_TIERING":
-		return dim
 	default:
 		return dim
 	}

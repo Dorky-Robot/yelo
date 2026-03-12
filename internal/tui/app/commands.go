@@ -67,10 +67,7 @@ func restoreObject(client aws.S3Client, bucket, key string, days int32, tier str
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		err = client.RestoreObject(ctx, aws.RestoreInput{
-			Bucket: bucket,
-			Key:    key,
-			Days:   days,
-			Tier:   parsedTier,
+			Bucket: bucket, Key: key, Days: days, Tier: parsedTier,
 		})
 		return restoreCompleteMsg{key: key, err: err}
 	}
@@ -83,70 +80,48 @@ func loadProfiles() tea.Cmd {
 	}
 }
 
-func testProfile(profile string) tea.Cmd {
+func testProfile(bucketName, profile string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		client, err := aws.NewClient(ctx, "", profile)
 		if err != nil {
-			return profileTestMsg{profile: profile, ok: false, err: err}
+			return profileTestMsg{profile: profile, bucket: bucketName, ok: false, err: err}
 		}
 		_, err = client.ListBuckets(ctx)
-		if err != nil {
-			return profileTestMsg{profile: profile, ok: false, err: err}
-		}
-		return profileTestMsg{profile: profile, ok: true}
+		return profileTestMsg{profile: profile, bucket: bucketName, ok: err == nil, err: err}
 	}
 }
 
 func clearFlashAfter(d time.Duration) tea.Cmd {
-	return tea.Tick(d, func(time.Time) tea.Msg {
-		return clearFlashMsg{}
-	})
+	return tea.Tick(d, func(time.Time) tea.Msg { return clearFlashMsg{} })
 }
 
-// readAWSProfiles parses ~/.aws/credentials and ~/.aws/config for profile names.
 func readAWSProfiles() ([]string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
 	}
-
 	seen := map[string]bool{}
 	var profiles []string
 
-	// Parse credentials file: [profile-name]
-	if f, err := os.Open(filepath.Join(home, ".aws", "credentials")); err == nil {
-		defer f.Close()
+	for _, rel := range []string{".aws/credentials", ".aws/config"} {
+		f, err := os.Open(filepath.Join(home, rel))
+		if err != nil {
+			continue
+		}
 		scanner := bufio.NewScanner(f)
 		for scanner.Scan() {
 			line := strings.TrimSpace(scanner.Text())
 			if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
-				name := line[1 : len(line)-1]
+				name := strings.TrimPrefix(line[1:len(line)-1], "profile ")
 				if !seen[name] {
 					seen[name] = true
 					profiles = append(profiles, name)
 				}
 			}
 		}
+		f.Close()
 	}
-
-	// Parse config file: [profile name] or [default]
-	if f, err := os.Open(filepath.Join(home, ".aws", "config")); err == nil {
-		defer f.Close()
-		scanner := bufio.NewScanner(f)
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
-				name := line[1 : len(line)-1]
-				name = strings.TrimPrefix(name, "profile ")
-				if !seen[name] {
-					seen[name] = true
-					profiles = append(profiles, name)
-				}
-			}
-		}
-	}
-
 	return profiles, nil
 }
