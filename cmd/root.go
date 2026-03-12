@@ -70,8 +70,17 @@ func Execute() error {
 
 	args := flag.Args()
 	if len(args) == 0 {
-		printUsage()
-		return nil
+		// No subcommand — launch interactive TUI.
+		cfg, err := config.Load(opts.Config)
+		if err != nil {
+			return fmt.Errorf("loading config: %w", err)
+		}
+		st, err := state.Load("")
+		if err != nil {
+			return fmt.Errorf("loading state: %w", err)
+		}
+		env := &Env{Cfg: cfg, State: st, Opts: opts}
+		return runTUI(env, nil)
 	}
 
 	name := args[0]
@@ -122,6 +131,7 @@ Commands:
   buckets [list|add|remove|default]  Manage configured buckets
   cd <path>                    Set working directory
   pwd                          Show current bucket and prefix
+  tui                          Interactive terminal UI
 
 Global flags:
   --bucket   S3 bucket name
