@@ -2,96 +2,66 @@ package app
 
 import "github.com/charmbracelet/lipgloss"
 
+// Color palette — matches tunnels' visual language.
 var (
-	// Colors
-	colorBorder    = lipgloss.Color("240")
-	colorTitle     = lipgloss.Color("39")
-	colorSelected  = lipgloss.Color("170")
-	colorPrefix    = lipgloss.Color("39")
-	colorGlacier   = lipgloss.Color("208")
-	colorDeep      = lipgloss.Color("196")
-	colorStandard  = lipgloss.Color("40")
-	colorGlacierIR = lipgloss.Color("75")
-	colorRestoring = lipgloss.Color("226")
-	colorAvailable = lipgloss.Color("40")
-	colorDim       = lipgloss.Color("242")
-	colorHelp      = lipgloss.Color("241")
-	colorError     = lipgloss.Color("196")
-	colorFlash     = lipgloss.Color("229")
+	cyan   = lipgloss.Color("6")  // Primary action / highlight
+	green  = lipgloss.Color("2")  // Success / running / STANDARD
+	red    = lipgloss.Color("1")  // Danger / DEEP_ARCHIVE
+	yellow = lipgloss.Color("3")  // Warning / restoring
+	dim    = lipgloss.Color("8")  // Secondary / inactive
+	white  = lipgloss.Color("15") // Active input
+	blue   = lipgloss.Color("4")  // GLACIER_IR
+	orange = lipgloss.Color("208") // GLACIER
 
-	// Header bar
-	headerStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(colorTitle).
-			Padding(0, 1)
-
-	// List panel
-	listBorderStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(colorBorder)
-
-	// Detail panel
-	detailBorderStyle = lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(colorBorder)
-
-	// Items
-	selectedStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(colorSelected)
-
-	prefixStyle = lipgloss.NewStyle().
-			Foreground(colorPrefix)
-
-	dimStyle = lipgloss.NewStyle().
-			Foreground(colorDim)
-
-	// Detail labels
-	labelStyle = lipgloss.NewStyle().
-			Foreground(colorDim).
-			Width(10).
-			Align(lipgloss.Right)
-
-	// Status bar
-	statusBarStyle = lipgloss.NewStyle().
-			Foreground(colorHelp).
-			Padding(0, 1)
-
-	errorStyle = lipgloss.NewStyle().
-			Foreground(colorError).
-			Bold(true)
-
-	flashStyle = lipgloss.NewStyle().
-			Foreground(colorFlash)
+	// Selection highlight background
+	selectBg = lipgloss.Color("#1e2837")
 )
 
-// storageClassStyle returns styled text for a storage class.
-func storageClassStyle(class string) string {
+func storageClassColor(class string) lipgloss.Color {
 	switch class {
 	case "DEEP_ARCHIVE":
-		return lipgloss.NewStyle().Foreground(colorDeep).Render("DEEP")
+		return red
 	case "GLACIER":
-		return lipgloss.NewStyle().Foreground(colorGlacier).Render("GLCR")
+		return orange
 	case "GLACIER_IR":
-		return lipgloss.NewStyle().Foreground(colorGlacierIR).Render("GL_IR")
+		return blue
 	case "STANDARD":
-		return lipgloss.NewStyle().Foreground(colorStandard).Render("STD")
-	case "STANDARD_IA", "ONEZONE_IA":
-		return lipgloss.NewStyle().Foreground(colorDim).Render("IA")
-	case "INTELLIGENT_TIERING":
-		return lipgloss.NewStyle().Foreground(colorDim).Render("INT_T")
+		return green
+	case "STANDARD_IA", "ONEZONE_IA", "INTELLIGENT_TIERING":
+		return dim
 	default:
-		return dimStyle.Render(class)
+		return dim
 	}
 }
 
-func restoreStatusStyle(status string) string {
+func storageClassLabel(class string) string {
+	switch class {
+	case "DEEP_ARCHIVE":
+		return "DEEP"
+	case "GLACIER":
+		return "GLACIER"
+	case "GLACIER_IR":
+		return "GLCR_IR"
+	case "STANDARD":
+		return "STD"
+	case "STANDARD_IA":
+		return "STD_IA"
+	case "ONEZONE_IA":
+		return "OZ_IA"
+	case "INTELLIGENT_TIERING":
+		return "INT_T"
+	default:
+		return class
+	}
+}
+
+func restoreLabel(status string) (string, lipgloss.Color) {
 	switch status {
 	case "in-progress":
-		return lipgloss.NewStyle().Foreground(colorRestoring).Render("restoring...")
+		return "restoring", yellow
 	case "available":
-		return lipgloss.NewStyle().Foreground(colorAvailable).Render("available")
+		return "available", green
 	default:
-		return dimStyle.Render("--")
+		return "", dim
 	}
 }

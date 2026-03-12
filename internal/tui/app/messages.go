@@ -14,16 +14,10 @@ type detailResultMsg struct {
 	err  error
 }
 
-// bucketsResultMsg is sent when a ListBuckets or config bucket list completes.
+// bucketsResultMsg is sent when a ListBuckets call completes.
 type bucketsResultMsg struct {
 	buckets []string
 	err     error
-}
-
-// downloadProgressMsg reports download progress.
-type downloadProgressMsg struct {
-	transferred int64
-	total       int64
 }
 
 // downloadCompleteMsg is sent when a download finishes.
@@ -39,8 +33,18 @@ type restoreCompleteMsg struct {
 	err error
 }
 
-// flashMsg shows a temporary message in the status bar.
-type flashMsg string
+// profilesResultMsg is sent when AWS profiles are loaded.
+type profilesResultMsg struct {
+	profiles []string
+	err      error
+}
 
-// clearFlashMsg clears the flash message.
+// profileTestMsg is sent when a profile connectivity test completes.
+type profileTestMsg struct {
+	profile string
+	ok      bool
+	err     error
+}
+
+// clearFlashMsg clears the status message after a delay.
 type clearFlashMsg struct{}

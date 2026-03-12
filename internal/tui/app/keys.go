@@ -1,69 +1,53 @@
 package app
 
-import "github.com/charmbracelet/bubbles/key"
-
-type keyMap struct {
-	Up       key.Binding
-	Down     key.Binding
-	Enter    key.Binding
-	Back     key.Binding
-	Get      key.Binding
-	Restore  key.Binding
-	Buckets  key.Binding
-	Refresh  key.Binding
-	Search   key.Binding
-	Help     key.Binding
-	Quit     key.Binding
-	Escape   key.Binding
+// keybinding definitions for rendering the context-sensitive bar.
+type binding struct {
+	key  string
+	desc string
 }
 
-var keys = keyMap{
-	Up: key.NewBinding(
-		key.WithKeys("up", "k"),
-		key.WithHelp("k/up", "up"),
-	),
-	Down: key.NewBinding(
-		key.WithKeys("down", "j"),
-		key.WithHelp("j/dn", "down"),
-	),
-	Enter: key.NewBinding(
-		key.WithKeys("enter", "l"),
-		key.WithHelp("enter", "open"),
-	),
-	Back: key.NewBinding(
-		key.WithKeys("backspace", "h"),
-		key.WithHelp("bksp/h", "back"),
-	),
-	Get: key.NewBinding(
-		key.WithKeys("g"),
-		key.WithHelp("g", "get"),
-	),
-	Restore: key.NewBinding(
-		key.WithKeys("r"),
-		key.WithHelp("r", "restore"),
-	),
-	Buckets: key.NewBinding(
-		key.WithKeys("b"),
-		key.WithHelp("b", "buckets"),
-	),
-	Refresh: key.NewBinding(
-		key.WithKeys("R"),
-		key.WithHelp("R", "refresh"),
-	),
-	Search: key.NewBinding(
-		key.WithKeys("/"),
-		key.WithHelp("/", "filter"),
-	),
-	Help: key.NewBinding(
-		key.WithKeys("?"),
-		key.WithHelp("?", "help"),
-	),
-	Quit: key.NewBinding(
-		key.WithKeys("q", "ctrl+c"),
-		key.WithHelp("q", "quit"),
-	),
-	Escape: key.NewBinding(
-		key.WithKeys("esc"),
-		key.WithHelp("esc", "close"),
-	),
-}
+// Keybindings per context.
+var (
+	browseKeys = []binding{
+		{"j/k", "nav"}, {"enter", "open"}, {"h", "back"},
+		{"g", "get"}, {"r", "restore"}, {"b", "buckets"},
+		{"/", "filter"}, {".", "more"}, {"q", "quit"},
+	}
+
+	browseSubmenuKeys = []binding{
+		{"R", "refresh"}, {"s", "stat"}, {".", "back"}, {"?", "help"},
+	}
+
+	bucketPickerKeys = []binding{
+		{"j/k", "nav"}, {"enter", "select"}, {"esc", "cancel"},
+	}
+
+	credentialsKeys = []binding{
+		{"j/k", "nav"}, {"a", "add bucket"}, {"t", "test"},
+		{"d", "remove"}, {".", "more"}, {"q", "quit"},
+	}
+
+	credentialsSubmenuKeys = []binding{
+		{"e", "edit"}, {"D", "set default"}, {"R", "refresh"}, {".", "back"}, {"?", "help"},
+	}
+
+	confirmKeys = []binding{
+		{"y", "confirm"}, {"n/esc", "cancel"},
+	}
+
+	inputKeys = []binding{
+		{"Tab", "next field"}, {"Enter", "confirm"}, {"Esc", "cancel"},
+	}
+
+	helpKeys = []binding{
+		{"esc/q", "close"},
+	}
+
+	filterKeys = []binding{
+		{"enter/esc", "done"}, {"type", "filter"},
+	}
+
+	detailKeys = []binding{
+		{"esc", "close"}, {"g", "get"}, {"r", "restore"},
+	}
+)
