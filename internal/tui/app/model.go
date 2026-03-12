@@ -385,7 +385,7 @@ func (m Model) handleBrowse(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Enter):
 		filtered := m.filteredItems()
 		idx := m.browseTable.Cursor()
-		if idx >= len(filtered) {
+		if idx < 0 || idx >= len(filtered) {
 			return m, nil
 		}
 		item := filtered[idx]
@@ -435,7 +435,7 @@ func (m Model) handleBrowseSubmenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.submenu = false
 		filtered := m.filteredItems()
 		idx := m.browseTable.Cursor()
-		if idx < len(filtered) && !filtered[idx].IsPrefix {
+		if idx >= 0 && idx < len(filtered) && !filtered[idx].IsPrefix {
 			m.loading = "Loading metadata..."
 			return m, tea.Batch(m.spinner.Tick, fetchDetail(m.client, m.bucket, filtered[idx].Key))
 		}
@@ -500,7 +500,7 @@ func (m Model) handleProfilesSubmenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Delete):
 		// Unlink bucket from yelo config (doesn't touch AWS creds)
 		idx := m.profileTable.Cursor()
-		if idx < len(m.profiles) {
+		if idx >= 0 && idx < len(m.profiles) {
 			profile := m.profiles[idx]
 			// Find buckets linked to this profile and offer to unlink
 			for _, b := range m.cfg.Buckets {
@@ -553,7 +553,7 @@ func (m Model) handleBucketPicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case key.Matches(msg, keys.Enter):
 		idx := m.bucketPicker.Cursor()
-		if idx < len(m.bucketList) {
+		if idx >= 0 && idx < len(m.bucketList) {
 			m.bucket = m.bucketList[idx]
 			m.prefix = ""
 			m.mode = modeNormal
@@ -680,7 +680,7 @@ func (m Model) handleLinkForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) beginDownload() (Model, tea.Cmd) {
 	filtered := m.filteredItems()
 	idx := m.browseTable.Cursor()
-	if idx >= len(filtered) || filtered[idx].IsPrefix {
+	if idx < 0 || idx >= len(filtered) || filtered[idx].IsPrefix {
 		return m, nil
 	}
 	item := filtered[idx]
@@ -697,7 +697,7 @@ func (m Model) beginDownload() (Model, tea.Cmd) {
 func (m Model) beginRestore() (Model, tea.Cmd) {
 	filtered := m.filteredItems()
 	idx := m.browseTable.Cursor()
-	if idx >= len(filtered) || filtered[idx].IsPrefix {
+	if idx < 0 || idx >= len(filtered) || filtered[idx].IsPrefix {
 		return m, nil
 	}
 	item := filtered[idx]
@@ -727,7 +727,7 @@ func (m *Model) beginLinkBucket() {
 
 func (m Model) selectedProfile() string {
 	idx := m.profileTable.Cursor()
-	if idx < len(m.profiles) {
+	if idx >= 0 && idx < len(m.profiles) {
 		return m.profiles[idx]
 	}
 	return ""
