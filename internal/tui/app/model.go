@@ -542,26 +542,26 @@ func (m Model) handleDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleBucketForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch {
-	case isKey(msg, "esc"):
+	switch msg.Type {
+	case tea.KeyEscape:
 		m.mode = modeNormal
-	case isKey(msg, "tab"):
-		m.formField = (m.formField + 1) % 3
-	case isKey(msg, "enter"):
+	case tea.KeyTab, tea.KeyShiftTab:
+		if msg.Type == tea.KeyShiftTab {
+			m.formField = (m.formField + 2) % 3 // backwards
+		} else {
+			m.formField = (m.formField + 1) % 3
+		}
+	case tea.KeyEnter:
 		if m.formName != "" {
-			if m.mode == modeAddBucket {
-				m.cfg.AddBucket(m.formName, m.formRegion, m.formProfile)
-			} else {
-				m.cfg.AddBucket(m.formName, m.formRegion, m.formProfile)
-			}
+			m.cfg.AddBucket(m.formName, m.formRegion, m.formProfile)
 			_ = m.cfg.Save()
 			m.statusMsg = fmt.Sprintf("Saved bucket '%s'", m.formName)
 			m.mode = modeNormal
 			return m, clearFlashAfter(3 * time.Second)
 		}
-	case msg.Type == tea.KeyBackspace:
+	case tea.KeyBackspace:
 		m.formBackspace()
-	case msg.Type == tea.KeyRunes:
+	case tea.KeyRunes:
 		m.formInsert(string(msg.Runes))
 	}
 	return m, nil
