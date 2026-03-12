@@ -1042,23 +1042,25 @@ func (m Model) overlayDetail(base string) string {
 func (m Model) overlayBucketForm(base string, title string) string {
 	w := min(55, m.width-4)
 
-	cursor := func(field addField) string {
-		if m.formField == field {
-			return "_"
+	renderField := func(label string, value string, field addField) string {
+		active := m.formField == field
+		cursor := ""
+		marker := "  "
+		var style lipgloss.Style
+		if active {
+			cursor = "_"
+			marker = "> "
+			style = lipgloss.NewStyle().Foreground(white).Bold(true)
+		} else {
+			style = lipgloss.NewStyle().Foreground(dim)
 		}
-		return ""
-	}
-	fieldStyle := func(field addField) lipgloss.Style {
-		if m.formField == field {
-			return lipgloss.NewStyle().Foreground(white).Bold(true)
-		}
-		return lipgloss.NewStyle().Foreground(dim)
+		return style.Render(fmt.Sprintf("%s%-10s %s%s", marker, label+":", value, cursor))
 	}
 
-	content := fmt.Sprintf("\n%s\n\n%s\n\n%s\n",
-		fieldStyle(fieldName).Render(fmt.Sprintf("  Name:     %s%s", m.formName, cursor(fieldName))),
-		fieldStyle(fieldRegion).Render(fmt.Sprintf("  Region:   %s%s", m.formRegion, cursor(fieldRegion))),
-		fieldStyle(fieldProfile).Render(fmt.Sprintf("  Profile:  %s%s", m.formProfile, cursor(fieldProfile))),
+	content := fmt.Sprintf("\n%s\n%s\n%s\n",
+		renderField("Name", m.formName, fieldName),
+		renderField("Region", m.formRegion, fieldRegion),
+		renderField("Profile", m.formProfile, fieldProfile),
 	)
 
 	return placeOverlay(base, m.width, m.height, w, 10, title, content)
