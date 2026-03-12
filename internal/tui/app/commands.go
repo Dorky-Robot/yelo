@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -48,7 +49,6 @@ func downloadObject(client aws.S3Client, bucket, key string) tea.Cmd {
 			return downloadCompleteMsg{key: key, err: fmt.Errorf("creating %s: %w", localPath, err)}
 		}
 		defer f.Close()
-
 		ctx := context.Background()
 		if err := client.Download(ctx, bucket, key, f, nil); err != nil {
 			os.Remove(localPath)
@@ -91,6 +91,30 @@ func testProfile(bucketName, profile string) tea.Cmd {
 		_, err = client.ListBuckets(ctx)
 		return profileTestMsg{profile: profile, bucket: bucketName, ok: err == nil, err: err}
 	}
+}
+
+// runAWSConfigure suspends the TUI and shells out to `aws configure`.
+func runAWSConfigure(profile string) tea.Cmd {
+	args := []string{"configure"}
+	if profile != "" && profile != "default" {
+		args = append(args, "--profile", profile)
+	}
+	c := exec.Command("aws", args...)
+	return tea.ExecProcess(c, func(err error) tea.Msg {
+		return awsConfigDoneMsg{err: err}
+	})
+}
+
+// runAWSConfigureSSO suspends the TUI and shells out to `aws configure sso`.
+func runAWSConfigureSSO(profile string) tea.Cmd {
+	args := []string{"configure", "sso"}
+	if profile != "" && profile != "default" {
+		args = append(args, "--profile", profile)
+	}
+	c := exec.Command("aws", args...)
+	return tea.ExecProcess(c, func(err error) tea.Msg {
+		return awsConfigDoneMsg{err: err}
+	})
 }
 
 func clearFlashAfter(d time.Duration) tea.Cmd {

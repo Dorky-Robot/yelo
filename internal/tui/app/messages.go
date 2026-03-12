@@ -40,4 +40,9 @@ type profileTestMsg struct {
 	err     error
 }
 
+// awsConfigDoneMsg is sent after `aws configure` finishes.
+type awsConfigDoneMsg struct {
+	err error
+}
+
 type clearFlashMsg struct{}

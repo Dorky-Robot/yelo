@@ -19,15 +19,11 @@ import (
 	"github.com/dorkyrobot/yelo/internal/state"
 )
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
 type activeTab int
 
 const (
 	tabBrowse activeTab = iota
-	tabCredentials
+	tabProfiles
 )
 
 type mode int
@@ -39,8 +35,7 @@ const (
 	modeConfirm
 	modeFilter
 	modeDetail
-	modeAddBucket
-	modeEditBucket
+	modeLinkBucket // form: link a bucket to a profile
 )
 
 type confirmAction int
@@ -48,7 +43,7 @@ type confirmAction int
 const (
 	confirmDownload confirmAction = iota
 	confirmRestore
-	confirmRemoveBucket
+	confirmUnlinkBucket
 )
 
 // ---------------------------------------------------------------------------
@@ -56,88 +51,71 @@ const (
 // ---------------------------------------------------------------------------
 
 type Model struct {
-	// Dependencies
 	cfg    *config.Config
 	st     *state.State
 	client aws.S3Client
 
-	// Navigation
 	bucket string
 	prefix string
 	items  []aws.ObjectInfo
 
-	// Tab + mode
 	tab     activeTab
 	mode    mode
 	submenu bool
 
-	// Components
-	browseTable table.Model
-	credsTable  table.Model
-	spinner     spinner.Model
-	help        help.Model
-	filterInput textinput.Model
+	browseTable  table.Model
+	profileTable table.Model
+	spinner      spinner.Model
+	help         help.Model
+	filterInput  textinput.Model
 
-	// Form inputs (add/edit bucket)
-	formInputs [3]textinput.Model // name, region, profile
+	// Link bucket form (3 fields: bucket name, region, profile)
+	formInputs [3]textinput.Model
 	formFocus  int
 
-	// Bucket picker
 	bucketPicker table.Model
 	bucketList   []string
 
-	// Confirm dialog
 	confirmWhat   confirmAction
 	confirmTarget string
 
-	// Detail overlay
 	detail *aws.ObjectInfo
 
-	// Credentials
 	profiles      []string
-	profileStatus map[string]string
+	profileStatus map[string]string // profile name → "ok"/"fail"/"testing"
 
-	// Async
 	loading   string
 	statusMsg string
 
-	// Terminal
 	width  int
 	height int
 }
 
 func NewModel(cfg *config.Config, st *state.State, client aws.S3Client, bucket string) Model {
-	// Spinner
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 	sp.Style = lipgloss.NewStyle().Foreground(cyan)
 
-	// Help
 	h := help.New()
 	h.Styles.ShortKey = lipgloss.NewStyle().Foreground(lipgloss.Color("0")).Background(lipgloss.Color("8")).Padding(0, 1)
 	h.Styles.ShortDesc = lipgloss.NewStyle().Foreground(dim).PaddingRight(1)
 	h.Styles.ShortSeparator = lipgloss.NewStyle().Foreground(dim)
 	h.ShortSeparator = ""
 
-	// Browse table
 	bt := table.New(
 		table.WithColumns(browseColumns(80)),
-		table.WithRows(nil),
 		table.WithFocused(true),
 		table.WithHeight(10),
 		table.WithStyles(tableStyles()),
 	)
 
-	// Credentials table
-	ct := table.New(
-		table.WithColumns(credsColumns(80)),
-		table.WithRows(nil),
+	pt := table.New(
+		table.WithColumns(profileColumns(80)),
 		table.WithFocused(false),
 		table.WithHeight(10),
 		table.WithStyles(tableStyles()),
 	)
 
-	// Filter input
 	fi := textinput.New()
 	fi.Prompt = "filter: "
 	fi.PromptStyle = lipgloss.NewStyle().Foreground(cyan)
@@ -145,54 +123,47 @@ func NewModel(cfg *config.Config, st *state.State, client aws.S3Client, bucket s
 	fi.Placeholder = "type to filter..."
 	fi.PlaceholderStyle = lipgloss.NewStyle().Foreground(dim)
 
-	// Form inputs
-	nameInput := textinput.New()
-	nameInput.Prompt = "  Name:     "
-	nameInput.PromptStyle = lipgloss.NewStyle().Foreground(cyan)
-	nameInput.Placeholder = "my-bucket"
-	nameInput.PlaceholderStyle = lipgloss.NewStyle().Foreground(dim)
-	nameInput.Focus()
+	bucketInput := textinput.New()
+	bucketInput.Prompt = "  Bucket:   "
+	bucketInput.PromptStyle = lipgloss.NewStyle().Foreground(cyan)
+	bucketInput.Placeholder = "my-bucket"
+	bucketInput.PlaceholderStyle = lipgloss.NewStyle().Foreground(dim)
 
 	regionInput := textinput.New()
 	regionInput.Prompt = "  Region:   "
 	regionInput.PromptStyle = lipgloss.NewStyle().Foreground(dim)
-	regionInput.Placeholder = "us-east-1"
+	regionInput.Placeholder = "us-east-1 (optional)"
 	regionInput.PlaceholderStyle = lipgloss.NewStyle().Foreground(dim)
 
 	profileInput := textinput.New()
 	profileInput.Prompt = "  Profile:  "
 	profileInput.PromptStyle = lipgloss.NewStyle().Foreground(dim)
-	profileInput.Placeholder = "default"
+	profileInput.Placeholder = "(from selected row)"
 	profileInput.PlaceholderStyle = lipgloss.NewStyle().Foreground(dim)
 
-	// Bucket picker table
 	bp := table.New(
 		table.WithColumns([]table.Column{{Title: "Bucket", Width: 40}}),
-		table.WithRows(nil),
 		table.WithFocused(true),
 		table.WithHeight(10),
 		table.WithStyles(tableStyles()),
 	)
 
-	m := Model{
-		cfg:           cfg,
-		st:            st,
-		client:        client,
-		bucket:        bucket,
-		prefix:        st.Prefix,
-		tab:           tabBrowse,
-		mode:          modeNormal,
-		browseTable:   bt,
-		credsTable:    ct,
-		spinner:       sp,
-		help:          h,
-		filterInput:   fi,
-		formInputs:    [3]textinput.Model{nameInput, regionInput, profileInput},
-		bucketPicker:  bp,
+	return Model{
+		cfg:          cfg,
+		st:           st,
+		client:       client,
+		bucket:       bucket,
+		prefix:       st.Prefix,
+		tab:          tabBrowse,
+		browseTable:  bt,
+		profileTable: pt,
+		spinner:      sp,
+		help:         h,
+		filterInput:  fi,
+		formInputs:   [3]textinput.Model{bucketInput, regionInput, profileInput},
+		bucketPicker: bp,
 		profileStatus: map[string]string{},
 	}
-
-	return m
 }
 
 func (m Model) Init() tea.Cmd {
@@ -283,7 +254,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, clearFlashAfter(5 * time.Second)
 		}
 		m.profiles = msg.profiles
-		m.rebuildCredsTable()
+		m.rebuildProfileTable()
 		return m, nil
 
 	case profileTestMsg:
@@ -294,8 +265,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.profileStatus[msg.bucket] = "fail"
 			m.statusMsg = fmt.Sprintf("'%s' failed: %v", msg.bucket, msg.err)
 		}
-		m.rebuildCredsTable()
+		m.rebuildProfileTable()
 		return m, clearFlashAfter(5 * time.Second)
+
+	case awsConfigDoneMsg:
+		// Returned from `aws configure` — reload profiles
+		if msg.err != nil {
+			m.statusMsg = fmt.Sprintf("aws configure: %v", msg.err)
+		} else {
+			m.statusMsg = "Profile configured"
+		}
+		// Reload profiles to pick up changes
+		return m, tea.Batch(loadProfiles(), clearFlashAfter(3*time.Second))
 
 	case clearFlashMsg:
 		m.statusMsg = ""
@@ -308,13 +289,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKey(msg)
 	}
 
-	// Forward to active sub-components if in input modes
 	if m.mode == modeFilter {
 		var cmd tea.Cmd
 		m.filterInput, cmd = m.filterInput.Update(msg)
 		cmds = append(cmds, cmd)
 	}
-	if m.mode == modeAddBucket || m.mode == modeEditBucket {
+	if m.mode == modeLinkBucket {
 		var cmd tea.Cmd
 		m.formInputs[m.formFocus], cmd = m.formInputs[m.formFocus].Update(msg)
 		cmds = append(cmds, cmd)
@@ -324,18 +304,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) resizeTables() {
-	contentH := m.height - 5 // header(2) + status(2) + help(1)
+	contentH := m.height - 5
 	if contentH < 3 {
 		contentH = 3
 	}
-
 	m.browseTable.SetColumns(browseColumns(m.width))
 	m.browseTable.SetWidth(m.width)
 	m.browseTable.SetHeight(contentH)
 
-	m.credsTable.SetColumns(credsColumns(m.width))
-	m.credsTable.SetWidth(m.width)
-	m.credsTable.SetHeight(contentH)
+	m.profileTable.SetColumns(profileColumns(m.width))
+	m.profileTable.SetWidth(m.width)
+	m.profileTable.SetHeight(contentH)
 
 	pickerW := min(50, m.width-4)
 	m.bucketPicker.SetColumns([]table.Column{{Title: "Bucket", Width: pickerW - 4}})
@@ -353,55 +332,46 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case modeHelp:
 		m.mode = modeNormal
 		return m, nil
-
 	case modeBucketPicker:
 		return m.handleBucketPicker(msg)
-
 	case modeConfirm:
 		return m.handleConfirm(msg)
-
 	case modeFilter:
 		return m.handleFilter(msg)
-
 	case modeDetail:
 		return m.handleDetail(msg)
-
-	case modeAddBucket, modeEditBucket:
-		return m.handleForm(msg)
-
+	case modeLinkBucket:
+		return m.handleLinkForm(msg)
 	case modeNormal:
-		// Tab switching available in all normal contexts
 		if key.Matches(msg, keys.Tab1) {
 			m.tab = tabBrowse
 			m.submenu = false
 			m.browseTable.Focus()
-			m.credsTable.Blur()
+			m.profileTable.Blur()
 			return m, nil
 		}
 		if key.Matches(msg, keys.Tab2) {
-			m.tab = tabCredentials
+			m.tab = tabProfiles
 			m.submenu = false
-			m.credsTable.Focus()
+			m.profileTable.Focus()
 			m.browseTable.Blur()
-			if len(m.cfg.Buckets) > 0 && len(m.profiles) == 0 {
+			if len(m.profiles) == 0 {
 				m.loading = "Loading profiles..."
 				return m, loadProfiles()
 			}
-			m.rebuildCredsTable()
 			return m, nil
 		}
-
 		switch m.tab {
 		case tabBrowse:
 			if m.submenu {
 				return m.handleBrowseSubmenu(msg)
 			}
 			return m.handleBrowse(msg)
-		case tabCredentials:
+		case tabProfiles:
 			if m.submenu {
-				return m.handleCredsSubmenu(msg)
+				return m.handleProfilesSubmenu(msg)
 			}
-			return m.handleCreds(msg)
+			return m.handleProfiles(msg)
 		}
 	}
 	return m, nil
@@ -412,14 +382,9 @@ func (m Model) handleBrowse(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Quit):
 		m.saveState()
 		return m, tea.Quit
-
 	case key.Matches(msg, keys.Enter):
-		row := m.browseTable.SelectedRow()
-		if row == nil {
-			return m, nil
-		}
-		idx := m.browseTable.Cursor()
 		filtered := m.filteredItems()
+		idx := m.browseTable.Cursor()
 		if idx >= len(filtered) {
 			return m, nil
 		}
@@ -429,39 +394,28 @@ func (m Model) handleBrowse(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.loading = "Loading..."
 			return m, tea.Batch(m.spinner.Tick, fetchList(m.client, m.bucket, m.prefix))
 		}
-		// Object → show detail
 		m.loading = "Loading metadata..."
 		return m, tea.Batch(m.spinner.Tick, fetchDetail(m.client, m.bucket, item.Key))
-
 	case key.Matches(msg, keys.Back):
 		if m.prefix != "" {
 			m.prefix = parentPrefix(m.prefix)
 			m.loading = "Loading..."
 			return m, tea.Batch(m.spinner.Tick, fetchList(m.client, m.bucket, m.prefix))
 		}
-
 	case key.Matches(msg, keys.Get):
 		return m.beginDownload()
-
 	case key.Matches(msg, keys.Restore):
 		return m.beginRestore()
-
 	case key.Matches(msg, keys.Buckets):
 		m.loading = "Loading buckets..."
 		return m, tea.Batch(m.spinner.Tick, fetchBuckets(m.client))
-
 	case key.Matches(msg, keys.Filter):
 		m.mode = modeFilter
 		m.filterInput.SetValue("")
-		m.filterInput.Focus()
 		return m, m.filterInput.Focus()
-
 	case key.Matches(msg, keys.More):
 		m.submenu = true
-		return m, nil
-
 	default:
-		// Forward to table for navigation (j/k/up/down/pgup/pgdn)
 		var cmd tea.Cmd
 		m.browseTable, cmd = m.browseTable.Update(msg)
 		return m, cmd
@@ -492,77 +446,91 @@ func (m Model) handleBrowseSubmenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) handleCreds(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) handleProfiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, keys.Quit):
 		m.saveState()
 		return m, tea.Quit
 
 	case key.Matches(msg, keys.Add):
-		m.beginAddBucket()
-		return m, m.formInputs[0].Focus()
+		// Shell out to `aws configure` for the selected profile
+		profile := m.selectedProfile()
+		if profile == "" {
+			profile = "default"
+		}
+		return m, runAWSConfigure(profile)
 
 	case key.Matches(msg, keys.Test):
-		idx := m.credsTable.Cursor()
-		if idx < len(m.cfg.Buckets) {
-			b := m.cfg.Buckets[idx]
-			profile := b.Profile
-			if profile == "" {
-				profile = m.cfg.Profile
-			}
-			if profile == "" {
-				profile = "default"
-			}
-			m.profileStatus[b.Name] = "testing"
-			m.rebuildCredsTable()
-			m.statusMsg = fmt.Sprintf("Testing '%s'...", b.Name)
-			return m, testProfile(b.Name, profile)
+		profile := m.selectedProfile()
+		if profile != "" {
+			m.profileStatus[profile] = "testing"
+			m.rebuildProfileTable()
+			m.statusMsg = fmt.Sprintf("Testing '%s'...", profile)
+			return m, testProfile(profile, profile)
 		}
 
-	case key.Matches(msg, keys.Delete):
-		idx := m.credsTable.Cursor()
-		if idx < len(m.cfg.Buckets) {
-			m.confirmWhat = confirmRemoveBucket
-			m.confirmTarget = m.cfg.Buckets[idx].Name
-			m.mode = modeConfirm
-		}
+	case key.Matches(msg, keys.LinkBucket):
+		m.beginLinkBucket()
+		return m, m.formInputs[0].Focus()
 
 	case key.Matches(msg, keys.More):
 		m.submenu = true
 
 	default:
 		var cmd tea.Cmd
-		m.credsTable, cmd = m.credsTable.Update(msg)
+		m.profileTable, cmd = m.profileTable.Update(msg)
 		return m, cmd
 	}
 	return m, nil
 }
 
-func (m Model) handleCredsSubmenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) handleProfilesSubmenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, keys.More):
 		m.submenu = false
 
-	case key.Matches(msg, keys.Edit):
-		idx := m.credsTable.Cursor()
-		if idx < len(m.cfg.Buckets) {
-			b := m.cfg.Buckets[idx]
-			m.beginEditBucket(b.Name, b.Region, b.Profile)
-			m.submenu = false
-			return m, m.formInputs[0].Focus()
+	case key.Matches(msg, keys.AddSSO):
+		profile := m.selectedProfile()
+		if profile == "" {
+			profile = "default"
 		}
+		m.submenu = false
+		return m, runAWSConfigureSSO(profile)
 
-	case key.Matches(msg, keys.Default):
-		idx := m.credsTable.Cursor()
-		if idx < len(m.cfg.Buckets) {
-			name := m.cfg.Buckets[idx].Name
-			_ = m.cfg.SetDefault(name)
-			_ = m.cfg.Save()
-			m.statusMsg = fmt.Sprintf("Default set to '%s'", name)
-			m.rebuildCredsTable()
+	case key.Matches(msg, keys.Delete):
+		// Unlink bucket from yelo config (doesn't touch AWS creds)
+		idx := m.profileTable.Cursor()
+		if idx < len(m.profiles) {
+			profile := m.profiles[idx]
+			// Find buckets linked to this profile and offer to unlink
+			for _, b := range m.cfg.Buckets {
+				if b.Profile == profile || (b.Profile == "" && profile == "default") {
+					m.confirmWhat = confirmUnlinkBucket
+					m.confirmTarget = b.Name
+					m.mode = modeConfirm
+					m.submenu = false
+					return m, nil
+				}
+			}
+			m.statusMsg = fmt.Sprintf("No buckets linked to '%s'", profile)
 			m.submenu = false
 			return m, clearFlashAfter(3 * time.Second)
 		}
+
+	case key.Matches(msg, keys.Default):
+		// Set the default bucket for this profile
+		for _, b := range m.cfg.Buckets {
+			profile := m.selectedProfile()
+			if b.Profile == profile || (b.Profile == "" && profile == "default") {
+				_ = m.cfg.SetDefault(b.Name)
+				_ = m.cfg.Save()
+				m.statusMsg = fmt.Sprintf("Default set to '%s'", b.Name)
+				m.rebuildProfileTable()
+				m.submenu = false
+				return m, clearFlashAfter(3 * time.Second)
+			}
+		}
+		m.submenu = false
 
 	case key.Matches(msg, keys.Refresh):
 		m.submenu = false
@@ -583,7 +551,6 @@ func (m Model) handleBucketPicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.mode = modeNormal
 		}
 		return m, nil
-
 	case key.Matches(msg, keys.Enter):
 		idx := m.bucketPicker.Cursor()
 		if idx < len(m.bucketList) {
@@ -593,7 +560,6 @@ func (m Model) handleBucketPicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.loading = "Loading..."
 			return m, tea.Batch(m.spinner.Tick, fetchList(m.client, m.bucket, m.prefix))
 		}
-
 	default:
 		var cmd tea.Cmd
 		m.bucketPicker, cmd = m.bucketPicker.Update(msg)
@@ -613,11 +579,11 @@ func (m Model) handleConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case confirmRestore:
 			m.loading = fmt.Sprintf("Restoring %s...", path.Base(m.confirmTarget))
 			return m, tea.Batch(m.spinner.Tick, restoreObject(m.client, m.bucket, m.confirmTarget, 7, "Standard"))
-		case confirmRemoveBucket:
+		case confirmUnlinkBucket:
 			m.cfg.RemoveBucket(m.confirmTarget)
 			_ = m.cfg.Save()
-			m.statusMsg = fmt.Sprintf("Removed '%s'", m.confirmTarget)
-			m.rebuildCredsTable()
+			m.statusMsg = fmt.Sprintf("Unlinked '%s'", m.confirmTarget)
+			m.rebuildProfileTable()
 			return m, clearFlashAfter(3 * time.Second)
 		}
 	case key.Matches(msg, keys.Cancel):
@@ -636,7 +602,6 @@ func (m Model) handleFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	default:
 		var cmd tea.Cmd
 		m.filterInput, cmd = m.filterInput.Update(msg)
-		// Live-filter as user types
 		m.rebuildBrowseTable()
 		return m, cmd
 	}
@@ -650,7 +615,7 @@ func (m Model) handleDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Get):
 		if m.detail != nil {
 			m.mode = modeNormal
-			key := m.detail.Key
+			k := m.detail.Key
 			class := m.detail.StorageClass
 			restore := m.detail.RestoreStatus
 			m.detail = nil
@@ -659,39 +624,35 @@ func (m Model) handleDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, clearFlashAfter(3 * time.Second)
 			}
 			m.confirmWhat = confirmDownload
-			m.confirmTarget = key
+			m.confirmTarget = k
 			m.mode = modeConfirm
 		}
 	case key.Matches(msg, keys.Restore):
 		if m.detail != nil && isGlacier(m.detail.StorageClass) {
-			k := m.detail.Key
-			m.mode = modeConfirm
 			m.confirmWhat = confirmRestore
-			m.confirmTarget = k
+			m.confirmTarget = m.detail.Key
+			m.mode = modeConfirm
 			m.detail = nil
 		}
 	}
 	return m, nil
 }
 
-func (m Model) handleForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) handleLinkForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyEscape:
 		m.mode = modeNormal
 		return m, nil
-
 	case tea.KeyTab:
 		m.formInputs[m.formFocus].Blur()
 		m.formFocus = (m.formFocus + 1) % 3
 		m.updateFormStyles()
 		return m, m.formInputs[m.formFocus].Focus()
-
 	case tea.KeyShiftTab:
 		m.formInputs[m.formFocus].Blur()
 		m.formFocus = (m.formFocus + 2) % 3
 		m.updateFormStyles()
 		return m, m.formInputs[m.formFocus].Focus()
-
 	case tea.KeyEnter:
 		name := m.formInputs[0].Value()
 		if name != "" {
@@ -699,13 +660,12 @@ func (m Model) handleForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			profile := m.formInputs[2].Value()
 			m.cfg.AddBucket(name, region, profile)
 			_ = m.cfg.Save()
-			m.statusMsg = fmt.Sprintf("Saved bucket '%s'", name)
+			m.statusMsg = fmt.Sprintf("Linked bucket '%s' → profile '%s'", name, profile)
 			m.mode = modeNormal
-			m.rebuildCredsTable()
+			m.rebuildProfileTable()
 			return m, clearFlashAfter(3 * time.Second)
 		}
 		return m, nil
-
 	default:
 		var cmd tea.Cmd
 		m.formInputs[m.formFocus], cmd = m.formInputs[m.formFocus].Update(msg)
@@ -751,22 +711,26 @@ func (m Model) beginRestore() (Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *Model) beginAddBucket() {
-	m.mode = modeAddBucket
+func (m *Model) beginLinkBucket() {
+	m.mode = modeLinkBucket
 	m.formFocus = 0
 	for i := range m.formInputs {
 		m.formInputs[i].SetValue("")
 	}
+	// Pre-fill profile from selected row
+	profile := m.selectedProfile()
+	if profile != "" {
+		m.formInputs[2].SetValue(profile)
+	}
 	m.updateFormStyles()
 }
 
-func (m *Model) beginEditBucket(name, region, profile string) {
-	m.mode = modeEditBucket
-	m.formFocus = 0
-	m.formInputs[0].SetValue(name)
-	m.formInputs[1].SetValue(region)
-	m.formInputs[2].SetValue(profile)
-	m.updateFormStyles()
+func (m Model) selectedProfile() string {
+	idx := m.profileTable.Cursor()
+	if idx < len(m.profiles) {
+		return m.profiles[idx]
+	}
+	return ""
 }
 
 func (m *Model) updateFormStyles() {
@@ -803,13 +767,19 @@ func browseColumns(w int) []table.Column {
 	}
 }
 
-func credsColumns(w int) []table.Column {
-	nameW := 24
+func profileColumns(w int) []table.Column {
+	nameW := 20
+	bucketW := 24
+	regionW := 16
+	statusW := w - nameW - bucketW - regionW - 4
+	if statusW < 10 {
+		statusW = 10
+	}
 	return []table.Column{
-		{Title: "Bucket", Width: nameW},
-		{Title: "Region", Width: 16},
-		{Title: "Profile", Width: 16},
-		{Title: "Status", Width: w - nameW - 16 - 16 - 4},
+		{Title: "Profile", Width: nameW},
+		{Title: "Linked Bucket", Width: bucketW},
+		{Title: "Region", Width: regionW},
+		{Title: "Status", Width: statusW},
 	}
 }
 
@@ -835,24 +805,38 @@ func (m *Model) rebuildBrowseTable() {
 	m.browseTable.SetRows(rows)
 }
 
-func (m *Model) rebuildCredsTable() {
-	buckets := m.cfg.Buckets
-	rows := make([]table.Row, len(buckets))
-	for i, b := range buckets {
-		name := b.Name
-		if name == m.cfg.DefaultBucket {
-			name += " *"
+func (m *Model) rebuildProfileTable() {
+	// Build a lookup of profile → bucket config
+	bucketByProfile := map[string]*config.BucketConfig{}
+	for i := range m.cfg.Buckets {
+		b := &m.cfg.Buckets[i]
+		p := b.Profile
+		if p == "" {
+			p = "default"
 		}
-		region := b.Region
+		bucketByProfile[p] = b
+	}
+
+	rows := make([]table.Row, len(m.profiles))
+	for i, profile := range m.profiles {
+		bucket := ""
+		region := ""
+		if b, ok := bucketByProfile[profile]; ok {
+			bucket = b.Name
+			if b.Name == m.cfg.DefaultBucket {
+				bucket += " *"
+			}
+			region = b.Region
+		}
+		if bucket == "" {
+			bucket = lipgloss.NewStyle().Foreground(dim).Render("(none)")
+		}
 		if region == "" {
 			region = lipgloss.NewStyle().Foreground(dim).Render("(default)")
 		}
-		profile := b.Profile
-		if profile == "" {
-			profile = lipgloss.NewStyle().Foreground(dim).Render("(default)")
-		}
+
 		status := ""
-		switch m.profileStatus[b.Name] {
+		switch m.profileStatus[profile] {
 		case "ok":
 			status = lipgloss.NewStyle().Foreground(green).Render("● connected")
 		case "fail":
@@ -860,19 +844,18 @@ func (m *Model) rebuildCredsTable() {
 		case "testing":
 			status = lipgloss.NewStyle().Foreground(yellow).Render("● testing...")
 		}
-		rows[i] = table.Row{name, region, profile, status}
+
+		rows[i] = table.Row{profile, bucket, region, status}
 	}
-	m.credsTable.SetRows(rows)
+	m.profileTable.SetRows(rows)
 }
 
 func (m *Model) rebuildBucketPicker() {
 	rows := make([]table.Row, len(m.bucketList))
 	for i, b := range m.bucketList {
-		label := b
+		label := "  " + b
 		if b == m.bucket {
 			label = "* " + b
-		} else {
-			label = "  " + b
 		}
 		rows[i] = table.Row{label}
 	}
@@ -894,7 +877,6 @@ func (m Model) View() string {
 	statusBar := m.viewStatusBar()
 	helpBar := m.viewHelpBar()
 
-	// Pad content
 	usedH := lipgloss.Height(header) + lipgloss.Height(statusBar) + lipgloss.Height(helpBar)
 	contentH := m.height - usedH
 	if contentH < 1 {
@@ -904,7 +886,6 @@ func (m Model) View() string {
 
 	view := lipgloss.JoinVertical(lipgloss.Left, header, content, statusBar, helpBar)
 
-	// Overlays
 	switch m.mode {
 	case modeBucketPicker:
 		view = m.placeOverlay(view, m.viewBucketPicker(), "Select Bucket")
@@ -912,10 +893,8 @@ func (m Model) View() string {
 		view = m.placeOverlay(view, m.viewConfirm(), "Confirm")
 	case modeDetail:
 		view = m.placeOverlay(view, m.viewDetail(), "Object Detail")
-	case modeAddBucket:
-		view = m.placeOverlay(view, m.viewForm(), "Add Bucket")
-	case modeEditBucket:
-		view = m.placeOverlay(view, m.viewForm(), "Edit Bucket")
+	case modeLinkBucket:
+		view = m.placeOverlay(view, m.viewLinkForm(), "Link Bucket to Profile")
 	case modeHelp:
 		view = m.placeOverlay(view, m.viewHelp(), "Help")
 	}
@@ -924,7 +903,7 @@ func (m Model) View() string {
 }
 
 func (m Model) viewHeader() string {
-	tab := func(label string, num string, active bool) string {
+	renderTab := func(label, num string, active bool) string {
 		numStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("0")).Background(lipgloss.Color("8")).Padding(0, 1)
 		labelStyle := lipgloss.NewStyle().Foreground(dim)
 		if active {
@@ -935,57 +914,41 @@ func (m Model) viewHeader() string {
 	}
 
 	title := lipgloss.NewStyle().Foreground(cyan).Bold(true).Render(" yelo ")
-	tabs := title + "  " + tab("Browse", "1", m.tab == tabBrowse) + " " + tab("Credentials", "2", m.tab == tabCredentials)
-
-	border := lipgloss.NewStyle().Foreground(dim).Width(m.width).Render(strings.Repeat("─", m.width))
+	tabs := title + "  " + renderTab("Browse", "1", m.tab == tabBrowse) + " " + renderTab("Profiles", "2", m.tab == tabProfiles)
+	border := lipgloss.NewStyle().Foreground(dim).Render(strings.Repeat("─", m.width))
 	return tabs + "\n" + border
 }
 
 func (m Model) viewContent() string {
 	if m.loading != "" {
-		return lipgloss.NewStyle().Padding(1, 2).Render(
-			m.spinner.View() + " " + m.loading,
-		)
+		return lipgloss.NewStyle().Padding(1, 2).Render(m.spinner.View() + " " + m.loading)
 	}
 
 	switch m.tab {
 	case tabBrowse:
 		if m.bucket == "" {
-			return lipgloss.NewStyle().Foreground(dim).Padding(1, 2).Render(
-				"No bucket selected. Press b to pick a bucket.",
-			)
+			return lipgloss.NewStyle().Foreground(dim).Padding(1, 2).Render("No bucket selected. Press b to pick a bucket.")
 		}
 		if m.mode == modeFilter {
 			return m.filterInput.View() + "\n" + m.browseTable.View()
 		}
 		return m.browseTable.View()
 
-	case tabCredentials:
-		if len(m.cfg.Buckets) == 0 {
-			msg := lipgloss.NewStyle().Foreground(dim).Padding(1, 2).Render(
-				"No buckets configured. Press a to add one.",
-			)
-			if len(m.profiles) > 0 {
-				msg += "\n\n" + lipgloss.NewStyle().Foreground(dim).Padding(0, 2).Render(
-					fmt.Sprintf("AWS profiles found: %s", strings.Join(m.profiles, ", ")),
-				)
-			}
-			return msg
-		}
-		view := m.credsTable.View()
-		if len(m.profiles) > 0 {
-			view += "\n" + lipgloss.NewStyle().Foreground(dim).Padding(0, 2).Render(
-				fmt.Sprintf("AWS profiles: %s", strings.Join(m.profiles, ", ")),
+	case tabProfiles:
+		if len(m.profiles) == 0 {
+			return lipgloss.NewStyle().Foreground(dim).Padding(1, 2).Render(
+				"No AWS profiles found.\n\n" +
+					"Run `aws configure` to set up credentials, or press a to launch it now.\n" +
+					"Profiles are read from ~/.aws/credentials and ~/.aws/config.",
 			)
 		}
-		return view
+		return m.profileTable.View()
 	}
 	return ""
 }
 
 func (m Model) viewStatusBar() string {
 	border := lipgloss.NewStyle().Foreground(dim).Render(strings.Repeat("─", m.width))
-
 	var line string
 	if m.loading != "" {
 		line = lipgloss.NewStyle().Foreground(cyan).Padding(0, 1).Render(m.spinner.View() + " " + m.loading)
@@ -997,8 +960,9 @@ func (m Model) viewStatusBar() string {
 		line = lipgloss.NewStyle().Foreground(color).Padding(0, 1).Render(m.statusMsg)
 	} else if m.tab == tabBrowse && m.bucket != "" {
 		line = lipgloss.NewStyle().Foreground(dim).Padding(0, 1).Render(m.bucket + ":/" + m.prefix)
+	} else if m.tab == tabProfiles {
+		line = lipgloss.NewStyle().Foreground(dim).Padding(0, 1).Render("Profiles from ~/.aws/ — credentials managed by AWS CLI")
 	}
-
 	return border + "\n" + line
 }
 
@@ -1014,7 +978,7 @@ func (m Model) viewHelpBar() string {
 		return m.help.View(filterKeyMap{})
 	case modeDetail:
 		return m.help.View(detailKeyMap{})
-	case modeAddBucket, modeEditBucket:
+	case modeLinkBucket:
 		return m.help.View(formKeyMap{})
 	case modeNormal:
 		switch {
@@ -1022,34 +986,31 @@ func (m Model) viewHelpBar() string {
 			return m.help.View(browseSubmenuKeyMap{})
 		case m.tab == tabBrowse:
 			return m.help.View(browseKeyMap{})
-		case m.tab == tabCredentials && m.submenu:
-			return m.help.View(credentialsSubmenuKeyMap{})
-		case m.tab == tabCredentials:
-			return m.help.View(credentialsKeyMap{})
+		case m.tab == tabProfiles && m.submenu:
+			return m.help.View(profilesSubmenuKeyMap{})
+		case m.tab == tabProfiles:
+			return m.help.View(profilesKeyMap{})
 		}
 	}
 	return ""
 }
 
 // ---------------------------------------------------------------------------
-// Overlay views (content only — wrapping + placement done by placeOverlay)
+// Overlay content
 // ---------------------------------------------------------------------------
 
-func (m Model) viewBucketPicker() string {
-	return m.bucketPicker.View()
-}
+func (m Model) viewBucketPicker() string { return m.bucketPicker.View() }
 
 func (m Model) viewConfirm() string {
 	action := "download"
-	if m.confirmWhat == confirmRestore {
+	switch m.confirmWhat {
+	case confirmRestore:
 		action = "restore"
-	} else if m.confirmWhat == confirmRemoveBucket {
-		action = "remove"
+	case confirmUnlinkBucket:
+		action = "unlink"
 	}
-	target := path.Base(m.confirmTarget)
-
 	return fmt.Sprintf("\n  %s '%s' ?\n\n  %s\n",
-		action, target,
+		action, path.Base(m.confirmTarget),
 		lipgloss.NewStyle().Foreground(dim).Render("Press y to confirm, n or Esc to cancel"),
 	)
 }
@@ -1060,12 +1021,10 @@ func (m Model) viewDetail() string {
 	}
 	obj := m.detail
 	var b strings.Builder
-
 	field := func(label, value string) {
 		l := lipgloss.NewStyle().Foreground(dim).Width(12).Align(lipgloss.Right).Render(label)
 		b.WriteString(fmt.Sprintf("  %s  %s\n", l, value))
 	}
-
 	b.WriteString("\n")
 	field("Key", path.Base(obj.Key))
 	field("Path", obj.Key)
@@ -1087,11 +1046,10 @@ func (m Model) viewDetail() string {
 		field("Restore", lipgloss.NewStyle().Foreground(color).Render(label))
 	}
 	b.WriteString("\n")
-
 	return b.String()
 }
 
-func (m Model) viewForm() string {
+func (m Model) viewLinkForm() string {
 	var b strings.Builder
 	b.WriteString("\n")
 	for i := range m.formInputs {
@@ -1103,37 +1061,41 @@ func (m Model) viewForm() string {
 }
 
 func (m Model) viewHelp() string {
-	helpLines := []struct{ key, desc string }{
-		{"1 / 2", "Switch tabs"},
-		{"↑/k  ↓/j", "Navigate up / down"},
+	lines := []struct{ key, desc string }{
+		{"1 / 2", "Switch tabs (Browse / Profiles)"},
+		{"↑/k  ↓/j", "Navigate"},
 		{"enter / l", "Open prefix or view detail"},
 		{"h / bksp", "Go to parent directory"},
 		{"g", "Download selected object"},
 		{"r", "Initiate Glacier restore"},
 		{"b", "Switch bucket"},
-		{"/", "Filter current listing"},
+		{"/", "Filter listing"},
 		{".", "Toggle secondary actions"},
-		{"R", "Refresh listing"},
-		{"s", "View object detail"},
-		{"a", "Add bucket (Credentials)"},
-		{"t", "Test connection (Credentials)"},
-		{"d", "Remove bucket (Credentials)"},
-		{"e", "Edit bucket (Credentials)"},
+		{"", ""},
+		{"a", "Run `aws configure` for selected profile"},
+		{"S", "Run `aws configure sso`"},
+		{"t", "Test profile connectivity"},
+		{"l", "Link a bucket to a profile"},
+		{"d", "Unlink bucket from profile"},
 		{"D", "Set default bucket"},
+		{"", ""},
+		{"R", "Refresh"},
 		{"?", "Show this help"},
 		{"q", "Quit (saves state)"},
 	}
-
 	var b strings.Builder
 	b.WriteString("\n")
-	for _, h := range helpLines {
+	for _, h := range lines {
+		if h.key == "" {
+			b.WriteString("\n")
+			continue
+		}
 		k := lipgloss.NewStyle().Foreground(cyan).Width(14).Render(h.key)
 		b.WriteString(fmt.Sprintf("  %s  %s\n", k, h.desc))
 	}
 	return b.String()
 }
 
-// placeOverlay renders content in a centered bordered box over base.
 func (m Model) placeOverlay(base, content, title string) string {
 	contentLines := strings.Count(content, "\n") + 1
 	w := min(60, m.width-4)
@@ -1146,18 +1108,13 @@ func (m Model) placeOverlay(base, content, title string) string {
 		Height(h).
 		Render(content)
 
-	// Inject title into top border line
 	boxLines := strings.Split(box, "\n")
 	if len(boxLines) > 0 {
 		titleRendered := lipgloss.NewStyle().Foreground(cyan).Bold(true).Render(" " + title + " ")
 		top := []rune(boxLines[0])
-		if len(top) > 4 {
-			// Replace chars 2..2+titleLen with the rendered title
-			plain := " " + title + " "
-			plainLen := len([]rune(plain))
-			if 2+plainLen < len(top) {
-				boxLines[0] = string(top[:2]) + titleRendered + string(top[2+plainLen:])
-			}
+		plainLen := len([]rune(" " + title + " "))
+		if len(top) > 2+plainLen {
+			boxLines[0] = string(top[:2]) + titleRendered + string(top[2+plainLen:])
 		}
 	}
 	box = strings.Join(boxLines, "\n")
@@ -1187,10 +1144,10 @@ func (m Model) filteredItems() []aws.ObjectInfo {
 	return result
 }
 
-func displayName(key, prefix string) string {
-	name := strings.TrimPrefix(key, prefix)
+func displayName(k, prefix string) string {
+	name := strings.TrimPrefix(k, prefix)
 	if name == "" {
-		return key
+		return k
 	}
 	return name
 }
