@@ -2,7 +2,7 @@
 
 ## What yelo is
 
-yelo is an FTP-style CLI for Amazon S3 and Glacier. You `cd` into buckets, `ls` prefixes, `get` and `put` objects, `restore` archives. It remembers where you are between sessions.
+yelo (Tagalog for "ice") is an FTP-style CLI for Amazon S3 and Glacier. You `cd` into buckets, `ls` prefixes, `get` and `put` objects, `freeze` and `thaw` archives. It remembers where you are between sessions. An interactive TUI lets you browse, manage profiles, track restores, and manage cached files.
 
 ## Architectural principles
 
@@ -12,191 +12,119 @@ No central controller. Components coordinate through shared files and convention
 
 This means:
 
-- **Config is a file** (`~/.config/yelo/config.yaml`). Any tool can read or write it — yelo, a script, a text editor, another CLI. No API, no daemon, no lock.
+- **Config is a file** (`~/.config/yelo/config.yaml`). Any tool can read or write it — yelo, a script, a text editor, another CLI. No API, no lock.
 - **State is a file** (`~/.config/yelo/state.json`). The current bucket and prefix persist between sessions as a JSON blob. `cd` writes it; `ls`, `get`, `pwd` read it. They don't talk to each other — they talk to the file.
-- **Commands are independent**. Each command resolves its own context (bucket, prefix, region, profile) by reading config and state. There's no shared in-memory state, no command bus, no event system. A command starts, reads files, calls AWS, writes files, exits.
+- **Commands are independent**. Each command resolves its own context (bucket, prefix, region, profile) by reading config and state. There's no shared in-memory state, no command bus, no event system.
 
 ### Files as the coordination layer
 
-Following the same pattern as [sipag](https://github.com/Dorky-Robot/sipag):
-
-| sipag | yelo | Principle |
+| File | Purpose | Format |
 |---|---|---|
-| `queue/*.md` task files | `~/.config/yelo/state.json` | Filesystem is the database |
-| Task files are plain markdown | Config is YAML, state is JSON | Human-readable, debuggable with `cat` |
-| TUI and executor share a directory | All commands share config + state files | Decoupled components, shared surface |
-| Any tool can drop a `.md` in `queue/` | Any tool can edit config or state | Open for composition |
-| `ls running/` tells you what's happening | `cat state.json` tells you where you are | Inspectable without special tooling |
+| `~/.config/yelo/config.yaml` | Buckets, defaults, daemon settings | YAML |
+| `~/.config/yelo/state.json` | Current bucket and prefix | JSON |
+| `~/.yelo/cache/{bucket}/{key}` | Downloaded file cache | Raw files |
+| `~/.yelo/notifications/{id}.json` | Restore request tracking | JSON |
+| `~/.yelo/daemon.pid` | Daemon process ID | Text |
+| `~/.yelo/daemon.log` | Daemon activity log | Text |
 
-Why files, not an in-memory registry or database:
-
-- **Any tool can participate.** A shell script can set the bucket by writing `state.json`. Another CLI can add a bucket by appending to `config.yaml`. Composition is free.
+Why files:
+- **Any tool can participate.** A shell script can set the bucket by writing `state.json`.
 - **Human-readable.** `cat`, `vim`, `jq`. No query language, no API.
-- **Debuggable.** When something is wrong, you read the file. No hidden state.
-- **Crash-proof.** If yelo dies mid-command, the last-written state is still there. No in-memory state to lose.
-- **No daemon.** yelo is not a long-running process. Each invocation is stateless except for what it reads from disk.
+- **Debuggable.** When something is wrong, you read the file.
+- **Crash-proof.** If yelo dies mid-command, the last-written state is still there.
 
 ### Resolution chains, not configuration hierarchies
 
 When a command needs a value (bucket, region, profile), it walks a resolution chain — a priority-ordered list of places to look. The first source that has an answer wins.
 
-**Bucket resolution:**
 ```
-flag (--bucket) → state file → config default → sole configured bucket
+Bucket:  --bucket flag → state file → config default → sole configured bucket
+Region:  --region flag → per-bucket config → global config → AWS SDK default
+Profile: --profile flag → per-bucket config → global config → AWS SDK default
 ```
-
-**Region resolution:**
-```
-flag (--region) → per-bucket config → global config → AWS SDK default
-```
-
-**Profile resolution:**
-```
-flag (--profile) → per-bucket config → global config → AWS SDK default
-```
-
-This is choreography at the value level. No single source of truth — instead, a clear priority order that any component can participate in. A CI script can set `--bucket` as a flag. An interactive user can `cd` into a bucket (which writes state). A global default covers the common case. They all work, and the resolution chain decides who wins.
 
 ### Pipe-friendly by default
 
-yelo adapts its output based on whether stdout is a TTY:
-
 | Context | Behavior |
 |---|---|
-| Interactive terminal | Human-readable: aligned columns, labels, progress bars |
-| Piped / redirected | Machine-readable: bare keys, tab-separated values, no progress noise |
+| Interactive terminal | Human-readable: aligned columns, labels |
+| Piped / redirected | Machine-readable: bare keys, tab-separated values |
 
-All diagnostic output (progress bars, status messages) goes to stderr. Data goes to stdout. This means `yelo get myfile.tar.gz -` pipes cleanly, and `yelo ls | grep pattern` works without filtering out progress bars.
+All diagnostic output goes to stderr. Data goes to stdout.
 
-This is another form of choreography — yelo doesn't need to know what's consuming its output. It checks the file descriptor and adapts. The downstream tool doesn't ask yelo to be quiet; yelo observes its environment and responds.
-
-### Commands are self-contained
-
-Each command is a single function that:
-
-1. Reads config and state from files
-2. Resolves its context (bucket, prefix, region, profile) through the resolution chain
-3. Calls AWS
-4. Writes any state changes back to files
-5. Outputs results
-
-No shared runtime, no middleware, no command pipeline. Commands don't depend on each other at runtime — they depend on the files. This is what makes them composable: `yelo cd mybucket:/data && yelo ls -l` works because `cd` writes state and `ls` reads it. They coordinate through the filesystem, not through a shared process.
-
-### Glacier awareness as a cross-cutting concern
-
-Glacier storage classes (GLACIER, DEEP_ARCHIVE, GLACIER_IR) affect multiple commands differently:
-
-- `get` checks storage class before attempting download, suggests `restore` if archived
-- `put` defaults to DEEP_ARCHIVE (yelo is Glacier-first)
-- `restore` validates tier against storage class (no Expedited for DEEP_ARCHIVE)
-- `stat` shows restore status
-- `ls -l` shows storage class
-
-This isn't implemented as middleware or a shared concern — each command handles Glacier in its own way, using shared helper functions (`isGlacierClass`, `ParseRestoreHeader`, `ValidateTier`). The helpers are pure functions, not services. They take data and return data.
-
-## File layout
+## Code layout
 
 ```
-~/.config/yelo/
-  config.yaml          # Buckets, defaults, region, profile
-  state.json           # Current bucket and prefix
+src/
+  main.rs           Entry point, TUI event loop, key handlers
+  cli.rs            Clap definitions, CLI command dispatch
+  app.rs            TUI state (App struct, modes, background tasks)
+  ui.rs             TUI rendering (ratatui)
+  aws_ops.rs        S3/Glacier SDK calls (blocking tokio runtime)
+  config.rs         YAML config
+  state.rs          JSON state
+  helpers.rs        Pure helpers (is_glacier, resolve_prefix, format_size)
+  output.rs         TTY detection + CLI output formatting
+  cache.rs          Local file cache
+  restore.rs        Restore notification management
+  credentials.rs    AWS credentials INI management
+  daemon.rs         Background auto-download daemon
+  log.rs            File logging
 ```
 
-### config.yaml
+### Module boundaries
 
-```yaml
-default: my-archive
-buckets:
-  my-archive:
-    region: us-west-2
-    profile: personal
-  work-backup:
-    region: us-east-1
-region: us-west-2
-profile: default
-```
+Each module takes data in and pushes data out. No circular dependencies.
 
-### state.json
+- **cli.rs** — CLI commands. Reads config/state, calls aws_ops, writes state, formats output.
+- **app.rs** — TUI state machine. Modes, background task channels, thread spawning.
+- **ui.rs** — Pure rendering. Reads App state, draws frames. No side effects.
+- **aws_ops.rs** — SDK calls. Knows nothing about config files or UI.
+- **config.rs / state.rs** — File I/O. Know nothing about AWS.
+- **helpers.rs** — Pure functions shared by CLI and TUI.
+- **daemon.rs** — Standalone background process. Polls restores, auto-downloads.
 
-```json
-{
-  "bucket": "my-archive",
-  "prefix": "photos/2024/"
-}
-```
-
-## Command structure
+## Commands
 
 ```
-yelo
-  pwd                 Show current bucket and prefix
-  cd <path>           Change working directory (FTP-style)
-  ls [path]           List objects and prefixes
-  stat <key>          Show object metadata
-  get <key> [dest]    Download object (- for stdout)
-  put <file> [key]    Upload object (default: DEEP_ARCHIVE)
-  restore <key>       Initiate Glacier restore
-  buckets             Manage configured buckets
-    (no subcommand)   List buckets
-    add <name>        Add a bucket
-    remove <name>     Remove a bucket
-    default [name]    Get or set default bucket
+yelo pwd                     Show current bucket and prefix
+yelo cd <path>               Change working directory (FTP-style)
+yelo ls [path]               List objects and prefixes
+yelo stat <key>              Show object metadata
+yelo get <key> [dest]        Download object (- for stdout)
+yelo put <file> [key]        Upload object (default: DEEP_ARCHIVE)
+yelo freeze <file> [key]     Archive to Glacier Deep Archive
+yelo thaw <key>              Restore from Glacier
+yelo restore <key>           (same as thaw)
+yelo buckets                 Manage configured buckets
+yelo daemon start|stop|status
+yelo tui                     Interactive terminal UI
 ```
 
-## Internal structure
+## TUI architecture
 
-```
-yelo/
-  main.go                       Entry point
-  go.mod
-  cmd/
-    root.go                     Command registry, global flags, env resolution
-    helpers.go                  Shared pure functions
-    cd.go, pwd.go, ls.go        Navigation commands
-    stat.go                     Metadata command
-    get.go, put.go              Transfer commands
-    restore.go                  Glacier restore command
-    buckets.go                  Bucket management command
-  internal/
-    config/config.go            YAML config read/write
-    state/
-      state.go                  JSON state read/write
-      resolve.go                FTP-style path resolution (pure logic)
-    aws/
-      client.go                 S3Client interface, initialization
-      glacier.go                Restore operations, tier validation
-      transfer.go               Download/upload with progress
-    output/format.go            TTY detection, adaptive formatting
-    tui/progress.go             Terminal progress bars (stderr)
-  doc/
-    yelo.1                      Man page
-```
+Four tabs: Browse, Profiles, Restores, Library.
 
-### Package boundaries
+**Event loop** (`main.rs`): Terminal events are read in a background thread to prevent blocking the spinner animation. Events arrive via `mpsc::channel` with `recv_timeout(100ms)`.
 
-- **cmd/** — Command definitions. Each file registers one command. Commands read config/state, call into `internal/`, write state, format output.
-- **internal/config/** — Config file I/O. Knows about YAML. Doesn't know about AWS or commands.
-- **internal/state/** — State file I/O and path resolution. Knows about JSON and FTP-style paths. Doesn't know about AWS or commands.
-- **internal/aws/** — AWS operations. Knows about the SDK. Doesn't know about config files, state files, or output formatting.
-- **internal/output/** — Output formatting. Knows about TTY detection and column alignment. Doesn't know about AWS or state.
-- **internal/tui/** — Progress bars. Knows about terminal width and stderr. Doesn't know about anything else.
+**State** (`app.rs`): The `App` struct holds all TUI state. `Mode` enum variants represent modal overlays (confirm dialogs, forms, pickers). Background tasks spawn threads that send `BgResult` variants back through a channel. `poll_bg()` processes results each frame.
 
-Each package reads data in and pushes data out. No circular dependencies. No package reaches into another's internals.
+**Rendering** (`ui.rs`): Pure functions that take `&App` and draw to a `Frame`. No mutations.
 
 ## Design decisions
 
 ### Why FTP-style navigation
 
-S3 is a flat key-value store, but humans think in directories. FTP-style `cd`/`ls`/`pwd` maps the mental model people already have onto S3's prefix-based listing. The state file makes this work across invocations — you don't lose your place.
+S3 is a flat key-value store, but humans think in directories. FTP-style `cd`/`ls`/`pwd` maps the mental model people already have onto S3's prefix-based listing.
 
 ### Why Glacier-first
 
 yelo defaults `put` to DEEP_ARCHIVE because the primary use case is cold archival. Most S3 CLIs default to STANDARD and treat Glacier as an afterthought. yelo treats Glacier as the default and STANDARD as the exception.
 
-### Why no `rm`, `cp`, `mv` (yet)
+### Why freeze/thaw
 
-Destructive operations on archival storage deserve careful thought. `rm` on DEEP_ARCHIVE is irreversible in a way that `rm` on STANDARD is not (no versioning safety net in typical archival setups). These commands should come with appropriate guardrails, not as afterthoughts.
+"yelo" means ice in Tagalog. `freeze` and `thaw` are the natural vocabulary for archiving and restoring. They map to `put --storage-class DEEP_ARCHIVE` and `restore` respectively, hiding AWS jargon behind intuitive metaphors.
 
-### Why no daemon
+### Why a daemon
 
-A daemon would introduce coordination problems (is it running? which port? how do I restart it?) for no benefit. yelo commands are short-lived and fast. The filesystem provides all the persistence needed.
+Glacier restores can take hours. The daemon polls pending restores and auto-downloads completed ones to `~/.yelo/cache/`. It runs as a standalone process (`yelo daemon start`) with PID file management, surviving TUI exits.
