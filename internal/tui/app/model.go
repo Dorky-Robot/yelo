@@ -35,7 +35,9 @@ const (
 	modeConfirm
 	modeFilter
 	modeDetail
-	modeLinkBucket // form: link a bucket to a profile
+	modeLinkBucket  // form: link a bucket to a profile
+	modeAddProfile  // form: add new AWS profile
+	modeEditProfile // form: edit existing AWS profile
 )
 
 type confirmAction int
@@ -44,6 +46,7 @@ const (
 	confirmDownload confirmAction = iota
 	confirmRestore
 	confirmUnlinkBucket
+	confirmDeleteProfile
 )
 
 // ---------------------------------------------------------------------------
@@ -72,6 +75,11 @@ type Model struct {
 	// Link bucket form (3 fields: bucket name, region, profile)
 	formInputs [3]textinput.Model
 	formFocus  int
+
+	// Profile form (4 fields: name, access key, secret key, region)
+	profFormInputs [4]textinput.Model
+	profFormFocus  int
+	editingProfile string // non-empty when editing
 
 	bucketPicker table.Model
 	bucketList   []string
@@ -148,6 +156,32 @@ func NewModel(cfg *config.Config, st *state.State, client aws.S3Client, bucket s
 		table.WithStyles(tableStyles()),
 	)
 
+	profName := textinput.New()
+	profName.Prompt = "  Profile:     "
+	profName.PromptStyle = lipgloss.NewStyle().Foreground(cyan)
+	profName.Placeholder = "my-profile"
+	profName.PlaceholderStyle = lipgloss.NewStyle().Foreground(dim)
+
+	profAccessKey := textinput.New()
+	profAccessKey.Prompt = "  Access Key:  "
+	profAccessKey.PromptStyle = lipgloss.NewStyle().Foreground(dim)
+	profAccessKey.Placeholder = "AKIAIOSFODNN7EXAMPLE"
+	profAccessKey.PlaceholderStyle = lipgloss.NewStyle().Foreground(dim)
+
+	profSecretKey := textinput.New()
+	profSecretKey.Prompt = "  Secret Key:  "
+	profSecretKey.PromptStyle = lipgloss.NewStyle().Foreground(dim)
+	profSecretKey.Placeholder = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+	profSecretKey.PlaceholderStyle = lipgloss.NewStyle().Foreground(dim)
+	profSecretKey.EchoMode = textinput.EchoPassword
+	profSecretKey.EchoCharacter = '•'
+
+	profRegion := textinput.New()
+	profRegion.Prompt = "  Region:      "
+	profRegion.PromptStyle = lipgloss.NewStyle().Foreground(dim)
+	profRegion.Placeholder = "us-east-1 (optional)"
+	profRegion.PlaceholderStyle = lipgloss.NewStyle().Foreground(dim)
+
 	return Model{
 		cfg:          cfg,
 		st:           st,
@@ -160,9 +194,10 @@ func NewModel(cfg *config.Config, st *state.State, client aws.S3Client, bucket s
 		spinner:      sp,
 		help:         h,
 		filterInput:  fi,
-		formInputs:   [3]textinput.Model{bucketInput, regionInput, profileInput},
-		bucketPicker: bp,
-		profileStatus: map[string]string{},
+		formInputs:     [3]textinput.Model{bucketInput, regionInput, profileInput},
+		profFormInputs: [4]textinput.Model{profName, profAccessKey, profSecretKey, profRegion},
+		bucketPicker:   bp,
+		profileStatus:  map[string]string{},
 	}
 }
 
@@ -268,14 +303,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.rebuildProfileTable()
 		return m, clearFlashAfter(5 * time.Second)
 
-	case awsConfigDoneMsg:
-		// Returned from `aws configure` — reload profiles
+	case profileSavedMsg:
+		m.loading = ""
 		if msg.err != nil {
-			m.statusMsg = fmt.Sprintf("aws configure: %v", msg.err)
+			m.statusMsg = fmt.Sprintf("Error: %v", msg.err)
 		} else {
-			m.statusMsg = "Profile configured"
+			m.statusMsg = fmt.Sprintf("Profile '%s' saved", msg.profile)
 		}
-		// Reload profiles to pick up changes
+		return m, tea.Batch(loadProfiles(), clearFlashAfter(3*time.Second))
+
+	case profileDetailMsg:
+		m.loading = ""
+		if msg.err != nil {
+			m.statusMsg = fmt.Sprintf("Error: %v", msg.err)
+			m.mode = modeNormal
+			return m, clearFlashAfter(3 * time.Second)
+		}
+		// Pre-fill the edit form
+		m.profFormInputs[0].SetValue(msg.profile)
+		m.profFormInputs[1].SetValue(msg.accessKey)
+		m.profFormInputs[2].SetValue("") // never pre-fill secret key
+		m.profFormInputs[3].SetValue(msg.region)
+		m.updateProfFormStyles()
+		return m, m.profFormInputs[1].Focus() // focus access key field
+
+	case awsConfigDoneMsg:
+		// Returned from `aws configure sso` — reload profiles
+		if msg.err != nil {
+			m.statusMsg = fmt.Sprintf("aws configure sso: %v", msg.err)
+		} else {
+			m.statusMsg = "SSO profile configured"
+		}
 		return m, tea.Batch(loadProfiles(), clearFlashAfter(3*time.Second))
 
 	case clearFlashMsg:
@@ -297,6 +355,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.mode == modeLinkBucket {
 		var cmd tea.Cmd
 		m.formInputs[m.formFocus], cmd = m.formInputs[m.formFocus].Update(msg)
+		cmds = append(cmds, cmd)
+	}
+	if m.mode == modeAddProfile || m.mode == modeEditProfile {
+		var cmd tea.Cmd
+		m.profFormInputs[m.profFormFocus], cmd = m.profFormInputs[m.profFormFocus].Update(msg)
 		cmds = append(cmds, cmd)
 	}
 
@@ -342,6 +405,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleDetail(msg)
 	case modeLinkBucket:
 		return m.handleLinkForm(msg)
+	case modeAddProfile, modeEditProfile:
+		return m.handleProfileForm(msg)
 	case modeNormal:
 		if key.Matches(msg, keys.Tab1) {
 			m.tab = tabBrowse
@@ -453,12 +518,16 @@ func (m Model) handleProfiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case key.Matches(msg, keys.Add):
-		// Shell out to `aws configure` for the selected profile
+		m.beginAddProfile()
+		return m, m.profFormInputs[0].Focus()
+
+	case key.Matches(msg, keys.Edit):
 		profile := m.selectedProfile()
-		if profile == "" {
-			profile = "default"
+		if profile != "" {
+			m.beginEditProfile(profile)
+			m.loading = "Loading profile..."
+			return m, loadProfileDetail(profile)
 		}
-		return m, runAWSConfigure(profile)
 
 	case key.Matches(msg, keys.Test):
 		profile := m.selectedProfile()
@@ -498,23 +567,13 @@ func (m Model) handleProfilesSubmenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, runAWSConfigureSSO(profile)
 
 	case key.Matches(msg, keys.Delete):
-		// Unlink bucket from yelo config (doesn't touch AWS creds)
-		idx := m.profileTable.Cursor()
-		if idx >= 0 && idx < len(m.profiles) {
-			profile := m.profiles[idx]
-			// Find buckets linked to this profile and offer to unlink
-			for _, b := range m.cfg.Buckets {
-				if b.Profile == profile || (b.Profile == "" && profile == "default") {
-					m.confirmWhat = confirmUnlinkBucket
-					m.confirmTarget = b.Name
-					m.mode = modeConfirm
-					m.submenu = false
-					return m, nil
-				}
-			}
-			m.statusMsg = fmt.Sprintf("No buckets linked to '%s'", profile)
+		profile := m.selectedProfile()
+		if profile != "" {
+			m.confirmWhat = confirmDeleteProfile
+			m.confirmTarget = profile
+			m.mode = modeConfirm
 			m.submenu = false
-			return m, clearFlashAfter(3 * time.Second)
+			return m, nil
 		}
 
 	case key.Matches(msg, keys.Default):
@@ -585,6 +644,9 @@ func (m Model) handleConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.statusMsg = fmt.Sprintf("Unlinked '%s'", m.confirmTarget)
 			m.rebuildProfileTable()
 			return m, clearFlashAfter(3 * time.Second)
+		case confirmDeleteProfile:
+			m.loading = fmt.Sprintf("Deleting '%s'...", m.confirmTarget)
+			return m, tea.Batch(m.spinner.Tick, deleteAWSProfile(m.confirmTarget))
 		}
 	case key.Matches(msg, keys.Cancel):
 		m.mode = modeNormal
@@ -723,6 +785,92 @@ func (m *Model) beginLinkBucket() {
 		m.formInputs[2].SetValue(profile)
 	}
 	m.updateFormStyles()
+}
+
+func (m *Model) beginAddProfile() {
+	m.mode = modeAddProfile
+	m.editingProfile = ""
+	m.profFormFocus = 0
+	for i := range m.profFormInputs {
+		m.profFormInputs[i].SetValue("")
+	}
+	m.updateProfFormStyles()
+}
+
+func (m *Model) beginEditProfile(profile string) {
+	m.mode = modeEditProfile
+	m.editingProfile = profile
+	m.profFormFocus = 1 // skip name, focus access key
+	for i := range m.profFormInputs {
+		m.profFormInputs[i].SetValue("")
+	}
+	m.profFormInputs[0].SetValue(profile)
+	m.updateProfFormStyles()
+}
+
+func (m Model) handleProfileForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEscape:
+		m.mode = modeNormal
+		m.loading = ""
+		return m, nil
+	case tea.KeyTab:
+		m.profFormInputs[m.profFormFocus].Blur()
+		m.profFormFocus = (m.profFormFocus + 1) % 4
+		// Skip name field when editing
+		if m.mode == modeEditProfile && m.profFormFocus == 0 {
+			m.profFormFocus = 1
+		}
+		m.updateProfFormStyles()
+		return m, m.profFormInputs[m.profFormFocus].Focus()
+	case tea.KeyShiftTab:
+		m.profFormInputs[m.profFormFocus].Blur()
+		m.profFormFocus = (m.profFormFocus + 3) % 4
+		// Skip name field when editing
+		if m.mode == modeEditProfile && m.profFormFocus == 0 {
+			m.profFormFocus = 3
+		}
+		m.updateProfFormStyles()
+		return m, m.profFormInputs[m.profFormFocus].Focus()
+	case tea.KeyEnter:
+		name := m.profFormInputs[0].Value()
+		accessKey := m.profFormInputs[1].Value()
+		secretKey := m.profFormInputs[2].Value()
+		region := m.profFormInputs[3].Value()
+
+		if name == "" {
+			m.statusMsg = "Profile name is required"
+			return m, clearFlashAfter(3 * time.Second)
+		}
+		if m.mode == modeAddProfile && (accessKey == "" || secretKey == "") {
+			m.statusMsg = "Access Key and Secret Key are required"
+			return m, clearFlashAfter(3 * time.Second)
+		}
+		if m.mode == modeEditProfile && accessKey == "" {
+			m.statusMsg = "Access Key is required"
+			return m, clearFlashAfter(3 * time.Second)
+		}
+
+		m.mode = modeNormal
+		m.loading = fmt.Sprintf("Saving '%s'...", name)
+		return m, tea.Batch(m.spinner.Tick, saveAWSProfile(name, accessKey, secretKey, region))
+	default:
+		var cmd tea.Cmd
+		m.profFormInputs[m.profFormFocus], cmd = m.profFormInputs[m.profFormFocus].Update(msg)
+		return m, cmd
+	}
+}
+
+func (m *Model) updateProfFormStyles() {
+	for i := range m.profFormInputs {
+		if i == m.profFormFocus {
+			m.profFormInputs[i].PromptStyle = lipgloss.NewStyle().Foreground(cyan).Bold(true)
+			m.profFormInputs[i].TextStyle = lipgloss.NewStyle().Foreground(white)
+		} else {
+			m.profFormInputs[i].PromptStyle = lipgloss.NewStyle().Foreground(dim)
+			m.profFormInputs[i].TextStyle = lipgloss.NewStyle().Foreground(dim)
+		}
+	}
 }
 
 func (m Model) selectedProfile() string {
@@ -895,6 +1043,10 @@ func (m Model) View() string {
 		view = m.placeOverlay(view, m.viewDetail(), "Object Detail")
 	case modeLinkBucket:
 		view = m.placeOverlay(view, m.viewLinkForm(), "Link Bucket to Profile")
+	case modeAddProfile:
+		view = m.placeOverlay(view, m.viewProfileForm(), "Add Profile")
+	case modeEditProfile:
+		view = m.placeOverlay(view, m.viewProfileForm(), "Edit Profile")
 	case modeHelp:
 		view = m.placeOverlay(view, m.viewHelp(), "Help")
 	}
@@ -938,8 +1090,8 @@ func (m Model) viewContent() string {
 		if len(m.profiles) == 0 {
 			return lipgloss.NewStyle().Foreground(dim).Padding(1, 2).Render(
 				"No AWS profiles found.\n\n" +
-					"Run `aws configure` to set up credentials, or press a to launch it now.\n" +
-					"Profiles are read from ~/.aws/credentials and ~/.aws/config.",
+					"Press " + lipgloss.NewStyle().Foreground(cyan).Render("a") + " to add a new profile.\n" +
+					"Profiles are stored in ~/.aws/credentials and ~/.aws/config.",
 			)
 		}
 		return m.profileTable.View()
@@ -978,7 +1130,7 @@ func (m Model) viewHelpBar() string {
 		return m.help.View(filterKeyMap{})
 	case modeDetail:
 		return m.help.View(detailKeyMap{})
-	case modeLinkBucket:
+	case modeLinkBucket, modeAddProfile, modeEditProfile:
 		return m.help.View(formKeyMap{})
 	case modeNormal:
 		switch {
@@ -1008,6 +1160,8 @@ func (m Model) viewConfirm() string {
 		action = "restore"
 	case confirmUnlinkBucket:
 		action = "unlink"
+	case confirmDeleteProfile:
+		action = "delete profile"
 	}
 	return fmt.Sprintf("\n  %s '%s' ?\n\n  %s\n",
 		action, path.Base(m.confirmTarget),
@@ -1049,6 +1203,21 @@ func (m Model) viewDetail() string {
 	return b.String()
 }
 
+func (m Model) viewProfileForm() string {
+	var b strings.Builder
+	b.WriteString("\n")
+	for i := range m.profFormInputs {
+		b.WriteString(m.profFormInputs[i].View())
+		b.WriteString("\n")
+	}
+	if m.mode == modeEditProfile {
+		b.WriteString(lipgloss.NewStyle().Foreground(dim).Padding(0, 2).Render("Leave Secret Key empty to keep existing"))
+		b.WriteString("\n")
+	}
+	b.WriteString("\n")
+	return b.String()
+}
+
 func (m Model) viewLinkForm() string {
 	var b strings.Builder
 	b.WriteString("\n")
@@ -1072,12 +1241,13 @@ func (m Model) viewHelp() string {
 		{"/", "Filter listing"},
 		{".", "Toggle secondary actions"},
 		{"", ""},
-		{"a", "Run `aws configure` for selected profile"},
-		{"S", "Run `aws configure sso`"},
+		{"a", "Add new AWS profile"},
+		{"e", "Edit selected profile"},
+		{"S", "Configure SSO profile (shells out)"},
 		{"t", "Test profile connectivity"},
 		{"l", "Link a bucket to a profile"},
-		{"d", "Unlink bucket from profile"},
-		{"D", "Set default bucket"},
+		{"d", "Delete profile (. submenu)"},
+		{"D", "Set default bucket (. submenu)"},
 		{"", ""},
 		{"R", "Refresh"},
 		{"?", "Show this help"},

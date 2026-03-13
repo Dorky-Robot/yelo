@@ -40,9 +40,21 @@ type profileTestMsg struct {
 	err     error
 }
 
-// awsConfigDoneMsg is sent after `aws configure` finishes.
+// awsConfigDoneMsg is sent after `aws configure sso` finishes.
 type awsConfigDoneMsg struct {
 	err error
+}
+
+type profileSavedMsg struct {
+	profile string
+	err     error
+}
+
+type profileDetailMsg struct {
+	profile   string
+	accessKey string
+	region    string
+	err       error
 }
 
 type clearFlashMsg struct{}

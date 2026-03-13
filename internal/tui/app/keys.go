@@ -55,10 +55,10 @@ var keys = keyMap{
 	Stat:    key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "stat")),
 	Help:    key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 
-	Add:        key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "aws configure")),
+	Add:        key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "add profile")),
 	AddSSO:     key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "aws sso")),
 	Test:       key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "test")),
-	Delete:     key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "unlink")),
+	Delete:     key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),
 	Edit:       key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit")),
 	Default:    key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "set default")),
 	LinkBucket: key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "link bucket")),
@@ -94,7 +94,7 @@ func (browseSubmenuKeyMap) FullHelp() [][]key.Binding {
 type profilesKeyMap struct{}
 
 func (profilesKeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{keys.Up, keys.Down, keys.Add, keys.Test, keys.LinkBucket, keys.More, keys.Quit}
+	return []key.Binding{keys.Up, keys.Down, keys.Add, keys.Edit, keys.Test, keys.LinkBucket, keys.More, keys.Quit}
 }
 func (profilesKeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{profilesKeyMap{}.ShortHelp()}
