@@ -1,2 +1,20 @@
-# Binary
+# Build artifacts
+/target/
 yelo
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# Local data (never commit user state)
+.yelo/
