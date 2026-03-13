@@ -85,6 +85,14 @@ pub enum Mode {
     LibraryInfo {
         file: cache::CachedFile,
     },
+    Upload {
+        focus: usize,
+        local_path: String,
+        key: String,
+        storage_class: String,
+        completions: Vec<String>,
+        comp_selected: Option<usize>,
+    },
 }
 
 pub enum BgResult {
@@ -144,6 +152,10 @@ pub enum BgResult {
         err: Option<String>,
     },
     CacheForPreview {
+        key: String,
+        err: Option<String>,
+    },
+    UploadComplete {
         key: String,
         err: Option<String>,
     },
@@ -429,6 +441,16 @@ impl App {
                         }
                     }
                 }
+                BgResult::UploadComplete { key, err } => {
+                    if let Some(e) = err {
+                        self.flash(format!("Upload failed: {}", e));
+                    } else {
+                        let name = key.rsplit('/').next().unwrap_or(&key);
+                        self.flash(format!("Uploaded {}", name));
+                        self.loading = Some("Refreshing...".into());
+                        self.spawn_list_objects();
+                    }
+                }
             }
         }
     }
@@ -619,6 +641,26 @@ impl App {
                 Err(e) => BgResult::DownloadComplete {
                     key,
                     local_path: String::new(),
+                    err: Some(e.to_string()),
+                },
+            });
+        });
+    }
+
+    pub fn spawn_upload(&self, local_path: &str, key: &str, storage_class: &str) {
+        let tx = self.bg_tx.clone();
+        let bucket = self.bucket.clone();
+        let key = key.to_string();
+        let local = std::path::PathBuf::from(local_path);
+        let sc = storage_class.to_string();
+        let region = self.config.resolve_region(&bucket);
+        let profile = self.config.resolve_profile(&bucket);
+        std::thread::spawn(move || {
+            let result = aws_ops::upload(&bucket, &key, &local, &sc, &region, &profile);
+            let _ = tx.send(match result {
+                Ok(()) => BgResult::UploadComplete { key, err: None },
+                Err(e) => BgResult::UploadComplete {
+                    key,
                     err: Some(e.to_string()),
                 },
             });

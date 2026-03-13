@@ -59,6 +59,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::ImagePreview { .. } => draw_image_preview(f, app),
         Mode::Rename { .. } => draw_rename(f, app),
         Mode::LibraryInfo { .. } => draw_library_info(f, app),
+        Mode::Upload { .. } => draw_upload_form(f, app),
         Mode::Normal | Mode::Filter => {}
     }
 }
@@ -520,6 +521,9 @@ fn draw_keybindings(f: &mut Frame, app: &App, area: Rect) {
         Mode::LinkBucket { .. } | Mode::AddProfile { .. } | Mode::EditProfile { .. } => {
             vec![("tab", "next"), ("enter", "save"), ("esc", "cancel")]
         }
+        Mode::Upload { .. } => {
+            vec![("tab", "next"), ("enter", "upload"), ("esc", "cancel")]
+        }
         Mode::Rename { .. } => vec![("enter", "save"), ("esc", "cancel")],
         Mode::LibraryInfo { .. } => vec![("esc", "close")],
         Mode::Normal => match (app.tab, app.submenu) {
@@ -534,6 +538,7 @@ fn draw_keybindings(f: &mut Frame, app: &App, area: Rect) {
             ],
             (Tab::Browse, true) => vec![
                 ("g", "get"),
+                ("u", "upload"),
                 ("r", "restore"),
                 ("s", "stat"),
                 ("b", "buckets"),
@@ -808,6 +813,87 @@ fn draw_link_form(f: &mut Frame, app: &App) {
     }
 }
 
+fn draw_upload_form(f: &mut Frame, app: &App) {
+    let Mode::Upload {
+        focus,
+        local_path,
+        key,
+        storage_class,
+        completions,
+        comp_selected,
+    } = &app.mode
+    else {
+        return;
+    };
+
+    let max_comp = 8;
+    let comp_height = completions.len().min(max_comp) as u16;
+    let form_height = 7 + if comp_height > 0 { comp_height + 1 } else { 0 };
+
+    let title = format!("Upload to s3://{}/", app.bucket);
+    let area = fixed_centered_rect(65, form_height, f.area());
+    let inner = draw_overlay_block(f, &title, area);
+
+    let mut constraints = vec![
+        Constraint::Length(1), // padding
+        Constraint::Length(1), // File field
+        Constraint::Length(1), // Key field
+        Constraint::Length(1), // Class field
+        Constraint::Length(1), // padding
+    ];
+    if comp_height > 0 {
+        constraints.push(Constraint::Length(comp_height));
+    }
+
+    let chunks = Layout::vertical(constraints).split(inner);
+
+    let fields = [
+        ("File:", local_path.as_str(), 0),
+        ("Key:", key.as_str(), 1),
+        ("Class:", storage_class.as_str(), 2),
+    ];
+
+    for (i, (label, value, _)) in fields.iter().enumerate() {
+        let cursor = if *focus == i { "_" } else { "" };
+        let style = if *focus == i {
+            Style::default().fg(CYAN)
+        } else {
+            Style::default().fg(DIM)
+        };
+        let line = Line::from(vec![
+            Span::styled(format!("  {:10}", label), style),
+            Span::styled(
+                format!("{}{}", value, cursor),
+                Style::default().fg(Color::White),
+            ),
+        ]);
+        f.render_widget(Paragraph::new(line), chunks[i + 1]);
+    }
+
+    // Draw completion list below the form fields
+    if comp_height > 0 {
+        let comp_area = chunks[5];
+        let visible: Vec<Line> = completions
+            .iter()
+            .take(max_comp)
+            .enumerate()
+            .map(|(i, entry)| {
+                let selected = *comp_selected == Some(i);
+                let is_dir = entry.ends_with('/');
+                let style = if selected {
+                    Style::default().bg(SELECT_BG).fg(Color::White)
+                } else if is_dir {
+                    Style::default().fg(CYAN)
+                } else {
+                    Style::default().fg(DIM)
+                };
+                Line::styled(format!("  {}", entry), style)
+            })
+            .collect();
+        f.render_widget(Paragraph::new(visible), comp_area);
+    }
+}
+
 fn draw_profile_form(f: &mut Frame, app: &App, title: &str) {
     let (focus, name, access_key, secret_key, region) = match &app.mode {
         Mode::AddProfile {
@@ -913,6 +999,7 @@ fn draw_help(f: &mut Frame) {
         ("", ""),
         ("", "── Browse . submenu ──"),
         ("R", "Refresh listing"),
+        ("u", "Upload local file"),
         ("s", "Object stat/metadata"),
         ("", ""),
         ("", "── Profiles ──"),

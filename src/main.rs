@@ -153,6 +153,7 @@ fn handle_key(app: &mut App, code: KeyCode) {
         Mode::ImagePreview { .. } => handle_image_preview(app, code),
         Mode::Rename { .. } => handle_rename(app, code),
         Mode::LibraryInfo { .. } => handle_library_info(app, code),
+        Mode::Upload { .. } => handle_upload_form(app, code),
     }
 }
 
@@ -311,6 +312,21 @@ fn handle_browse_submenu(app: &mut App, code: KeyCode) {
             app.submenu = false;
             app.loading = Some("Loading buckets...".into());
             app.spawn_list_buckets();
+        }
+        KeyCode::Char('u') => {
+            app.submenu = false;
+            if app.bucket.is_empty() {
+                app.flash("No bucket selected".into());
+                return;
+            }
+            app.mode = Mode::Upload {
+                focus: 0,
+                local_path: String::new(),
+                key: app.prefix.clone(),
+                storage_class: "DEEP_ARCHIVE".into(),
+                completions: Vec::new(),
+                comp_selected: None,
+            };
         }
         KeyCode::Char('R') => {
             app.submenu = false;
@@ -1039,6 +1055,224 @@ fn handle_link_form(app: &mut App, code: KeyCode) {
         }
         _ => {}
     }
+}
+
+// ---------------------------------------------------------------------------
+// Upload form
+// ---------------------------------------------------------------------------
+
+/// List filesystem entries matching a partial path for tab completion.
+fn complete_path(partial: &str) -> Vec<String> {
+    use std::path::Path;
+
+    let path = Path::new(partial);
+    let (dir, prefix) = if partial.ends_with('/') || partial.ends_with(std::path::MAIN_SEPARATOR) {
+        (path.to_path_buf(), "")
+    } else {
+        let dir = path.parent().unwrap_or(Path::new("."));
+        let prefix = path
+            .file_name()
+            .map(|f| f.to_str().unwrap_or(""))
+            .unwrap_or("");
+        (dir.to_path_buf(), prefix)
+    };
+
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut matches: Vec<(String, bool)> = entries
+        .filter_map(|e| {
+            let e = e.ok()?;
+            let name = e.file_name().to_string_lossy().to_string();
+            // Skip hidden files unless the user is explicitly typing a dot prefix
+            if name.starts_with('.') && !prefix.starts_with('.') {
+                return None;
+            }
+            if !name.starts_with(prefix) {
+                return None;
+            }
+            let is_dir = e.file_type().ok()?.is_dir();
+            let full = if dir == Path::new(".") && !partial.starts_with("./") {
+                name.clone()
+            } else {
+                dir.join(&name).to_string_lossy().to_string()
+            };
+            let display = if is_dir { format!("{}/", full) } else { full };
+            Some((display, is_dir))
+        })
+        .collect();
+
+    // Directories first, then files, alphabetical within each group
+    matches.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    matches.into_iter().map(|(s, _)| s).collect()
+}
+
+fn handle_upload_form(app: &mut App, code: KeyCode) {
+    let Mode::Upload {
+        focus,
+        local_path,
+        key,
+        storage_class,
+        completions,
+        comp_selected,
+    } = &mut app.mode
+    else {
+        return;
+    };
+
+    match code {
+        KeyCode::Esc => {
+            if !completions.is_empty() {
+                // First Esc dismisses completions
+                completions.clear();
+                *comp_selected = None;
+            } else {
+                app.mode = Mode::Normal;
+            }
+        }
+        KeyCode::Tab if *focus == 0 => {
+            // Tab completion for file path
+            if completions.is_empty() {
+                // Generate completions
+                let matches = complete_path(local_path);
+                if matches.len() == 1 {
+                    // Single match — complete it directly
+                    *local_path = matches[0].clone();
+                } else if !matches.is_empty() {
+                    // Fill common prefix
+                    let common = longest_common_prefix(&matches);
+                    if common.len() > local_path.len() {
+                        *local_path = common;
+                    }
+                    *completions = matches;
+                    *comp_selected = Some(0);
+                }
+            } else {
+                // Cycle through completions
+                let sel = comp_selected.get_or_insert(0);
+                *sel = (*sel + 1) % completions.len();
+                *local_path = completions[*sel].clone();
+            }
+        }
+        KeyCode::BackTab if *focus == 0 && !completions.is_empty() => {
+            // Cycle backwards through completions
+            let sel = comp_selected.get_or_insert(0);
+            *sel = if *sel == 0 {
+                completions.len() - 1
+            } else {
+                *sel - 1
+            };
+            *local_path = completions[*sel].clone();
+        }
+        KeyCode::Tab => {
+            // Move to next field (non-file fields)
+            if *focus == 0 && !local_path.is_empty() {
+                let filename = std::path::Path::new(local_path.as_str())
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy();
+                if key.is_empty() || key.ends_with('/') {
+                    key.push_str(&filename);
+                }
+            }
+            completions.clear();
+            *comp_selected = None;
+            *focus = (*focus + 1) % 3;
+        }
+        KeyCode::BackTab => {
+            completions.clear();
+            *comp_selected = None;
+            *focus = (*focus + 2) % 3;
+        }
+        KeyCode::Enter => {
+            if *focus == 0 && !completions.is_empty() {
+                // Accept the selected completion
+                if let Some(sel) = comp_selected {
+                    *local_path = completions[*sel].clone();
+                }
+                completions.clear();
+                *comp_selected = None;
+                // If it's a directory, stay on this field for further completion
+                if local_path.ends_with('/') {
+                    return;
+                }
+                return;
+            }
+            let lp = local_path.clone();
+            let k = key.clone();
+            let sc = storage_class.clone();
+            if lp.is_empty() {
+                app.flash("File path is required".into());
+                return;
+            }
+            if !std::path::Path::new(&lp).exists() {
+                app.flash(format!("File not found: {}", lp));
+                return;
+            }
+            if std::path::Path::new(&lp).is_dir() {
+                app.flash("Path is a directory, not a file".into());
+                return;
+            }
+            let final_key = if k.is_empty() || k.ends_with('/') {
+                let filename = std::path::Path::new(&lp)
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy();
+                format!("{}{}", k, filename)
+            } else {
+                k
+            };
+            let name = final_key.rsplit('/').next().unwrap_or(&final_key);
+            app.loading = Some(format!("Uploading {}...", name));
+            app.mode = Mode::Normal;
+            app.spawn_upload(&lp, &final_key, &sc);
+        }
+        KeyCode::Backspace => {
+            let field = match focus {
+                0 => {
+                    completions.clear();
+                    *comp_selected = None;
+                    local_path
+                }
+                1 => key,
+                _ => storage_class,
+            };
+            field.pop();
+        }
+        KeyCode::Char(c) => {
+            let field = match focus {
+                0 => {
+                    completions.clear();
+                    *comp_selected = None;
+                    local_path
+                }
+                1 => key,
+                _ => storage_class,
+            };
+            field.push(c);
+        }
+        _ => {}
+    }
+}
+
+fn longest_common_prefix(strings: &[String]) -> String {
+    if strings.is_empty() {
+        return String::new();
+    }
+    let first = &strings[0];
+    let mut len = first.len();
+    for s in &strings[1..] {
+        len = len.min(s.len());
+        for (i, (a, b)) in first.bytes().zip(s.bytes()).enumerate() {
+            if a != b {
+                len = len.min(i);
+                break;
+            }
+        }
+    }
+    first[..len].to_string()
 }
 
 // ---------------------------------------------------------------------------

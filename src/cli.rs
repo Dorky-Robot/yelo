@@ -91,6 +91,24 @@ pub enum Command {
         #[arg(long, default_value = "Standard")]
         tier: String,
     },
+    /// Archive a file to Glacier Deep Archive
+    Freeze {
+        /// Local file to upload
+        local: String,
+        /// Remote key (defaults to current prefix + filename)
+        remote: Option<String>,
+    },
+    /// Restore a frozen object from Glacier
+    Thaw {
+        /// Object path
+        path: String,
+        /// Days to keep restored copy
+        #[arg(long, default_value_t = 7)]
+        days: i32,
+        /// Retrieval tier (Standard, Bulk, Expedited)
+        #[arg(long, default_value = "Standard")]
+        tier: String,
+    },
     /// Manage configured buckets
     Buckets {
         #[command(subcommand)]
@@ -221,6 +239,10 @@ pub fn run(cli: Cli, cmd: Command) -> Result<()> {
             storage_class,
         } => run_put(&env, &local, remote.as_deref(), &storage_class),
         Command::Restore { path, days, tier } => run_restore(&env, &path, days, &tier),
+        Command::Freeze { local, remote } => {
+            run_put(&env, &local, remote.as_deref(), "DEEP_ARCHIVE")
+        }
+        Command::Thaw { path, days, tier } => run_restore(&env, &path, days, &tier),
         Command::Buckets { action } => run_buckets(&mut env, action),
         Command::Daemon { .. } => unreachable!("daemon handled in main"),
     }
