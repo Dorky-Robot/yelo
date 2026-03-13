@@ -52,7 +52,7 @@ yelo thaw backup.tar.gz
 yelo get backup.tar.gz
 
 # Regular upload/download
-yelo put photo.jpg                        # defaults to DEEP_ARCHIVE
+yelo put backup.sql                       # defaults to DEEP_ARCHIVE
 yelo put photo.jpg --storage-class STANDARD
 yelo get report.csv
 yelo get report.csv -          # stdout
