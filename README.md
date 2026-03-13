@@ -1,6 +1,6 @@
 # yelo
 
-FTP-style CLI for Amazon S3 and Glacier. Navigate buckets with `cd`/`ls`/`pwd`, transfer with `get`/`put`, manage archives with `restore`. Glacier-first — `put` defaults to `DEEP_ARCHIVE`.
+FTP-style CLI for Amazon S3 and Glacier. Navigate buckets with `cd`/`ls`/`pwd`, transfer with `get`/`put`, archive with `freeze`/`thaw`. Glacier-first — yelo means ice in Tagalog.
 
 ## Install
 
@@ -42,18 +42,21 @@ yelo cd my-bucket:
 yelo ls -l
 yelo cd backups/2024/
 
-# Upload (defaults to DEEP_ARCHIVE)
-yelo put backup.tar.gz
-yelo put photo.jpg --storage-class STANDARD
+# Freeze a file (archive to Glacier Deep Archive)
+yelo freeze backup.tar.gz
 
-# Download
+# Thaw it when you need it back
+yelo thaw backup.tar.gz
+
+# Download once thawed
+yelo get backup.tar.gz
+
+# Regular upload/download
+yelo put photo.jpg --storage-class STANDARD
 yelo get report.csv
 yelo get report.csv -          # stdout
 
-# Glacier restore
-yelo restore archive.tar.gz --tier Standard --days 7
-
-# Check status with the TUI
+# Interactive TUI
 yelo tui
 ```
 
@@ -89,7 +92,9 @@ yelo ls [-l] [-R] [path]              List objects/prefixes
 yelo stat <key>                       Object metadata
 yelo get <key> [dest|-]               Download (- for stdout)
 yelo put <file> [key]                 Upload (default: DEEP_ARCHIVE)
-yelo restore <key> [--days N] [--tier T]  Glacier restore
+yelo freeze <file> [key]              Archive to Glacier Deep Archive
+yelo thaw <key> [--days N] [--tier T] Restore from Glacier
+yelo restore <key> [--days N] [--tier T]  (alias for thaw)
 yelo buckets [list|add|remove|default]    Manage buckets
 yelo daemon [start|stop|status]           Background downloader
 yelo tui                              Interactive terminal UI
