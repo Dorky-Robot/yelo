@@ -4,12 +4,34 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RestoreStatus {
+    Pending,
+    Available,
+    Downloaded,
+    Failed,
+    Cancelled,
+}
+
+impl std::fmt::Display for RestoreStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Pending => write!(f, "pending"),
+            Self::Available => write!(f, "available"),
+            Self::Downloaded => write!(f, "downloaded"),
+            Self::Failed => write!(f, "failed"),
+            Self::Cancelled => write!(f, "cancelled"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RestoreNotification {
     pub id: String,
     #[serde(rename = "type")]
     pub type_: String,
-    pub status: String,
+    pub status: RestoreStatus,
     pub bucket: String,
     pub key: String,
     pub region: String,
@@ -62,16 +84,16 @@ pub fn list_requests() -> Vec<RestoreNotification> {
     requests
 }
 
-pub fn update_status(id: &str, status: &str, error: Option<&str>) -> Result<()> {
+pub fn update_status(id: &str, status: RestoreStatus, error: Option<&str>) -> Result<()> {
     let path = notifications_dir().join(format!("{}.json", id));
     let data = fs::read_to_string(&path).context("reading restore notification")?;
     let mut req: RestoreNotification =
         serde_json::from_str(&data).context("parsing restore notification")?;
-    req.status = status.to_string();
     req.last_checked_at = Some(Utc::now());
-    if status == "available" || status == "failed" {
+    if matches!(status, RestoreStatus::Available | RestoreStatus::Failed) {
         req.completed_at = Some(Utc::now());
     }
+    req.status = status;
     if let Some(e) = error {
         req.error = Some(e.to_string());
     }
@@ -101,7 +123,7 @@ pub fn submit_restore(
     let req = RestoreNotification {
         id,
         type_: "glacier_restore".to_string(),
-        status: "pending".to_string(),
+        status: RestoreStatus::Pending,
         bucket: bucket.to_string(),
         key: key.to_string(),
         region: region.to_string(),
@@ -118,14 +140,12 @@ pub fn submit_restore(
     Ok(req)
 }
 
-pub fn check_restore(req: &RestoreNotification) -> Result<String> {
+pub fn check_restore(req: &RestoreNotification) -> Result<RestoreStatus> {
     let info = crate::aws_ops::head_object(&req.bucket, &req.key, &req.region, &req.profile)?;
-    let new_status = match info.restore_status.as_str() {
-        "available" => "available",
-        "in-progress" => "pending",
-        _ => "pending",
-    };
-    Ok(new_status.to_string())
+    Ok(match info.restore_status.as_str() {
+        "available" => RestoreStatus::Available,
+        _ => RestoreStatus::Pending,
+    })
 }
 
 #[cfg(test)]
@@ -137,7 +157,7 @@ mod tests {
         let req = RestoreNotification {
             id: "restore-abc123".to_string(),
             type_: "glacier_restore".to_string(),
-            status: "pending".to_string(),
+            status: RestoreStatus::Pending,
             bucket: "my-bucket".to_string(),
             key: "photos/img.jpg".to_string(),
             region: "us-east-1".to_string(),
@@ -153,7 +173,7 @@ mod tests {
         let json = serde_json::to_string_pretty(&req).unwrap();
         let parsed: RestoreNotification = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.id, "restore-abc123");
-        assert_eq!(parsed.status, "pending");
+        assert_eq!(parsed.status, RestoreStatus::Pending);
         assert!(parsed.completed_at.is_none());
         assert!(parsed.error.is_none());
     }
@@ -163,7 +183,7 @@ mod tests {
         let req = RestoreNotification {
             id: "restore-def456".to_string(),
             type_: "glacier_restore".to_string(),
-            status: "available".to_string(),
+            status: RestoreStatus::Available,
             bucket: "my-bucket".to_string(),
             key: "archive/data.tar".to_string(),
             region: "us-west-2".to_string(),
@@ -178,7 +198,7 @@ mod tests {
         };
         let json = serde_json::to_string(&req).unwrap();
         let parsed: RestoreNotification = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.status, "available");
+        assert_eq!(parsed.status, RestoreStatus::Available);
         assert!(parsed.completed_at.is_some());
     }
 
@@ -187,7 +207,7 @@ mod tests {
         let req = RestoreNotification {
             id: "restore-err789".to_string(),
             type_: "glacier_restore".to_string(),
-            status: "failed".to_string(),
+            status: RestoreStatus::Failed,
             bucket: "my-bucket".to_string(),
             key: "broken.bin".to_string(),
             region: "eu-west-1".to_string(),
@@ -202,7 +222,7 @@ mod tests {
         };
         let json = serde_json::to_string(&req).unwrap();
         let parsed: RestoreNotification = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.status, "failed");
+        assert_eq!(parsed.status, RestoreStatus::Failed);
         assert_eq!(
             parsed.error.as_deref(),
             Some("Expedited not available for DEEP_ARCHIVE")
@@ -217,7 +237,7 @@ mod tests {
         let req = RestoreNotification {
             id: "restore-io123".to_string(),
             type_: "glacier_restore".to_string(),
-            status: "pending".to_string(),
+            status: RestoreStatus::Pending,
             bucket: "test-bucket".to_string(),
             key: "test/key.dat".to_string(),
             region: "us-east-1".to_string(),

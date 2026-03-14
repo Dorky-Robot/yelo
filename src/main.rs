@@ -27,6 +27,7 @@ use ratatui::backend::CrosstermBackend;
 
 use app::{App, ConfirmAction, Mode, Tab};
 use helpers::{is_glacier, is_image, parent_prefix};
+use restore::RestoreStatus;
 
 const TIER_OPTIONS: &[&str] = &["Standard", "Bulk", "Expedited"];
 
@@ -154,6 +155,7 @@ fn handle_key(app: &mut App, code: KeyCode) {
         Mode::Rename { .. } => handle_rename(app, code),
         Mode::LibraryInfo { .. } => handle_library_info(app, code),
         Mode::Upload { .. } => handle_upload_form(app, code),
+        Mode::ScpPicker { .. } => handle_scp_picker(app, code),
     }
 }
 
@@ -208,8 +210,8 @@ fn handle_browse(app: &mut App, code: KeyCode) {
     match code {
         KeyCode::Char('q') => app.should_quit = true,
         KeyCode::Esc | KeyCode::Char('h') | KeyCode::Backspace => {
-            if !app.prefix.is_empty() {
-                app.prefix = parent_prefix(&app.prefix);
+            if !app.state.prefix.is_empty() {
+                app.state.prefix = parent_prefix(&app.state.prefix);
                 app.loading = Some("Loading...".into());
                 app.spawn_list_objects();
             } else {
@@ -222,7 +224,7 @@ fn handle_browse(app: &mut App, code: KeyCode) {
             let filtered = app.filtered_items();
             if let Some(item) = filtered.get(app.browse_selected) {
                 if item.is_prefix {
-                    app.prefix = item.key.clone();
+                    app.state.prefix = item.key.clone();
                     app.loading = Some("Loading...".into());
                     app.spawn_list_objects();
                 } else if is_image(&item.key) && !is_glacier(&item.storage_class) {
@@ -230,9 +232,9 @@ fn handle_browse(app: &mut App, code: KeyCode) {
                     log::log(&format!(
                         "Image detected: key={:?} cached={}",
                         key,
-                        cache::is_cached(&app.bucket, &key)
+                        cache::is_cached(&app.state.bucket, &key)
                     ));
-                    if cache::is_cached(&app.bucket, &key) {
+                    if cache::is_cached(&app.state.bucket, &key) {
                         if app.load_image_preview(&key) {
                             app.mode = Mode::ImagePreview { key };
                         } else {
@@ -276,8 +278,8 @@ fn begin_open(app: &mut App) {
         }
         let key = item.key.clone();
         let name = key.rsplit('/').next().unwrap_or(&key).to_string();
-        if cache::is_cached(&app.bucket, &key) {
-            let _ = cache::open_cached(&app.bucket, &key);
+        if cache::is_cached(&app.state.bucket, &key) {
+            let _ = cache::open_cached(&app.state.bucket, &key);
             app.flash(format!("Opened {} (cached)", name));
         } else {
             app.loading = Some(format!("Caching {}...", name));
@@ -315,14 +317,14 @@ fn handle_browse_submenu(app: &mut App, code: KeyCode) {
         }
         KeyCode::Char('u') => {
             app.submenu = false;
-            if app.bucket.is_empty() {
+            if app.state.bucket.is_empty() {
                 app.flash("No bucket selected".into());
                 return;
             }
             app.mode = Mode::Upload {
                 focus: 0,
                 local_path: String::new(),
-                key: app.prefix.clone(),
+                key: app.state.prefix.clone(),
                 storage_class: "DEEP_ARCHIVE".into(),
                 completions: Vec::new(),
                 comp_selected: None,
@@ -520,7 +522,7 @@ fn handle_restores(app: &mut App, code: KeyCode) {
         KeyCode::Char('k') | KeyCode::Up => app.move_up(),
         KeyCode::Char('c') => {
             if let Some(req) = app.selected_restore().cloned()
-                && req.status == "pending"
+                && req.status == RestoreStatus::Pending
             {
                 app.loading = Some(format!("Checking {}...", req.id));
                 app.spawn_check_restore(&req);
@@ -528,7 +530,7 @@ fn handle_restores(app: &mut App, code: KeyCode) {
         }
         KeyCode::Enter => {
             if let Some(req) = app.selected_restore().cloned()
-                && req.status == "available"
+                && req.status == RestoreStatus::Available
             {
                 app.mode = Mode::Confirm {
                     action: ConfirmAction::Download,
@@ -547,7 +549,7 @@ fn handle_restores_submenu(app: &mut App, code: KeyCode) {
         KeyCode::Char('x') => {
             app.submenu = false;
             if let Some(req) = app.selected_restore().cloned()
-                && req.status == "pending"
+                && req.status == RestoreStatus::Pending
             {
                 app.mode = Mode::Confirm {
                     action: ConfirmAction::CancelRestore,
@@ -574,7 +576,7 @@ fn handle_restores_submenu(app: &mut App, code: KeyCode) {
             let pending = app
                 .restores
                 .iter()
-                .filter(|r| r.status == "pending")
+                .filter(|r| r.status == RestoreStatus::Pending)
                 .count();
             if pending > 0 {
                 app.loading = Some(format!("Checking {} pending restores...", pending));
@@ -587,7 +589,7 @@ fn handle_restores_submenu(app: &mut App, code: KeyCode) {
         KeyCode::Char('d') => {
             app.submenu = false;
             if let Some(req) = app.selected_restore().cloned()
-                && req.status != "pending"
+                && req.status != RestoreStatus::Pending
             {
                 app.mode = Mode::Confirm {
                     action: ConfirmAction::DeleteRestore,
@@ -678,6 +680,35 @@ fn handle_library(app: &mut App, code: KeyCode) {
 fn handle_library_submenu(app: &mut App, code: KeyCode) {
     match code {
         KeyCode::Char('.') | KeyCode::Esc => app.submenu = false,
+        KeyCode::Char('l') => {
+            app.submenu = false;
+            if let Some(file) = app.selected_cached_file().cloned() {
+                app.loading = Some("Generating presigned URL...".into());
+                app.spawn_presign(&file.bucket, &file.key);
+            }
+        }
+        KeyCode::Char('c') => {
+            app.submenu = false;
+            if let Some(file) = app.selected_cached_file().cloned() {
+                let mut hosts = parse_ssh_hosts();
+                let hn = hostname();
+                if !hn.is_empty() && !hosts.contains(&hn) {
+                    hosts.push(hn);
+                }
+                if hosts.is_empty() {
+                    app.flash("No SSH hosts found".into());
+                } else {
+                    // Pre-select current hostname if found
+                    let selected = hosts.iter().position(|h| h == &hostname()).unwrap_or(0);
+                    app.mode = Mode::ScpPicker {
+                        hosts,
+                        selected,
+                        dest: "~/Downloads/".into(),
+                        cached_path: file.path.to_string_lossy().to_string(),
+                    };
+                }
+            }
+        }
         KeyCode::Char('R') => {
             app.submenu = false;
             app.refresh_library();
@@ -686,6 +717,88 @@ fn handle_library_submenu(app: &mut App, code: KeyCode) {
         KeyCode::Char('?') => {
             app.mode = Mode::Help;
             app.submenu = false;
+        }
+        _ => {}
+    }
+}
+
+fn hostname() -> String {
+    std::process::Command::new("hostname")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+fn parse_ssh_hosts() -> Vec<String> {
+    let path = dirs::home_dir()
+        .unwrap_or_default()
+        .join(".ssh")
+        .join("config");
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+    let mut hosts = Vec::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed
+            .strip_prefix("Host ")
+            .or(trimmed.strip_prefix("Host\t"))
+        {
+            for host in rest.split_whitespace() {
+                // Skip wildcards and patterns
+                if !host.contains('*') && !host.contains('?') && !host.contains('!') {
+                    hosts.push(host.to_string());
+                }
+            }
+        }
+    }
+    hosts
+}
+
+fn handle_scp_picker(app: &mut App, code: KeyCode) {
+    let Mode::ScpPicker {
+        hosts,
+        selected,
+        dest,
+        cached_path,
+    } = &mut app.mode
+    else {
+        return;
+    };
+    match code {
+        KeyCode::Esc => app.mode = Mode::Normal,
+        KeyCode::Up => {
+            if *selected > 0 {
+                *selected -= 1;
+            }
+        }
+        KeyCode::Down => {
+            if *selected + 1 < hosts.len() {
+                *selected += 1;
+            }
+        }
+        KeyCode::Backspace => {
+            dest.pop();
+        }
+        KeyCode::Char(c) => {
+            dest.push(c);
+        }
+        KeyCode::Enter => {
+            let host = hosts[*selected].clone();
+            let path = cached_path.clone();
+            let d = dest.clone();
+            let name = std::path::Path::new(&*cached_path)
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            app.loading = Some(format!("Sending {} to {}...", name, host));
+            app.mode = Mode::Normal;
+            app.spawn_scp(&path, &host, &d);
         }
         _ => {}
     }
@@ -804,8 +917,8 @@ fn handle_image_preview(app: &mut App, code: KeyCode) {
             app.image_protocol = None;
             app.mode = Mode::Normal;
             let name = key.rsplit('/').next().unwrap_or(&key).to_string();
-            if cache::is_cached(&app.bucket, &key) {
-                let _ = cache::open_cached(&app.bucket, &key);
+            if cache::is_cached(&app.state.bucket, &key) {
+                let _ = cache::open_cached(&app.state.bucket, &key);
                 app.flash(format!("Opened {} (cached)", name));
             } else {
                 app.loading = Some(format!("Caching {}...", name));
@@ -833,7 +946,7 @@ fn handle_bucket_picker(app: &mut App, code: KeyCode) {
     };
     match code {
         KeyCode::Esc | KeyCode::Char('q') => {
-            if !app.bucket.is_empty() {
+            if !app.state.bucket.is_empty() {
                 app.mode = Mode::Normal;
             }
         }
@@ -849,8 +962,8 @@ fn handle_bucket_picker(app: &mut App, code: KeyCode) {
         }
         KeyCode::Enter => {
             if let Some(bucket) = buckets.get(*selected) {
-                app.bucket = bucket.clone();
-                app.prefix.clear();
+                app.state.bucket = bucket.clone();
+                app.state.prefix.clear();
                 app.mode = Mode::Normal;
                 app.awaiting_buckets = false;
                 app.loading = Some("Loading...".into());
@@ -885,7 +998,7 @@ fn handle_confirm(app: &mut App, code: KeyCode) {
                     app.spawn_delete_profile(&target);
                 }
                 ConfirmAction::CancelRestore => {
-                    let _ = restore::update_status(&target, "cancelled", None);
+                    let _ = restore::update_status(&target, RestoreStatus::Cancelled, None);
                     app.restores = restore::list_requests();
                     app.flash(format!("Cancelled {}", target));
                 }
@@ -984,8 +1097,8 @@ fn handle_detail(app: &mut App, code: KeyCode) {
                 app.flash("Object is in Glacier — restore it first (r)".into());
             } else {
                 let name = key.rsplit('/').next().unwrap_or(&key).to_string();
-                if cache::is_cached(&app.bucket, &key) {
-                    let _ = cache::open_cached(&app.bucket, &key);
+                if cache::is_cached(&app.state.bucket, &key) {
+                    let _ = cache::open_cached(&app.state.bucket, &key);
                     app.flash(format!("Opened {} (cached)", name));
                 } else {
                     app.loading = Some(format!("Caching {}...", name));

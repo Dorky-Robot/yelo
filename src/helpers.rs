@@ -7,15 +7,15 @@ pub fn is_glacier(class: &str) -> bool {
 
 /// Check if a key looks like an image file.
 pub fn is_image(key: &str) -> bool {
+    const EXTS: &[&str] = &[".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff", ".tif"];
     let lower = key.to_lowercase();
-    lower.ends_with(".jpg")
-        || lower.ends_with(".jpeg")
-        || lower.ends_with(".png")
-        || lower.ends_with(".gif")
-        || lower.ends_with(".bmp")
-        || lower.ends_with(".webp")
-        || lower.ends_with(".tiff")
-        || lower.ends_with(".tif")
+    EXTS.iter().any(|ext| lower.ends_with(ext))
+}
+
+/// Display name: strip the prefix to show just the relative part.
+pub fn display_name<'a>(key: &'a str, prefix: &str) -> &'a str {
+    let name = key.strip_prefix(prefix).unwrap_or(key);
+    if name.is_empty() { key } else { name }
 }
 
 /// Parse `bucket:path` syntax. Returns (bucket, path) where either may be empty.

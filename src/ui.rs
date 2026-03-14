@@ -60,6 +60,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::Rename { .. } => draw_rename(f, app),
         Mode::LibraryInfo { .. } => draw_library_info(f, app),
         Mode::Upload { .. } => draw_upload_form(f, app),
+        Mode::ScpPicker { .. } => draw_scp_picker(f, app),
         Mode::Normal | Mode::Filter => {}
     }
 }
@@ -115,7 +116,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
 // ---------------------------------------------------------------------------
 
 fn draw_browse(f: &mut Frame, app: &App, area: Rect) {
-    if app.bucket.is_empty() {
+    if app.state.bucket.is_empty() {
         let msg = Paragraph::new("No bucket selected. Press b to pick a bucket.")
             .style(Style::default().fg(DIM));
         f.render_widget(msg, area);
@@ -171,7 +172,7 @@ fn draw_browse(f: &mut Frame, app: &App, area: Rect) {
         .skip(scroll)
         .take(visible_height)
         .map(|(i, item)| {
-            let name = display_name(&item.key, &app.prefix);
+            let name = display_name(&item.key, &app.state.prefix);
             let (name_line, class_span, size_str) = if item.is_prefix {
                 (
                     Line::from(Span::styled(name, Style::default().fg(CYAN))),
@@ -180,7 +181,7 @@ fn draw_browse(f: &mut Frame, app: &App, area: Rect) {
                 )
             } else {
                 let class_color = storage_class_color(&item.storage_class);
-                let cached = cache::is_cached(&app.bucket, &item.key);
+                let cached = cache::is_cached(&app.state.bucket, &item.key);
                 let name_line = if cached {
                     Line::from(vec![
                         Span::styled("● ", Style::default().fg(GREEN)),
@@ -401,14 +402,14 @@ fn draw_restores(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(table, area);
 }
 
-fn restore_status_style(status: &str) -> (String, Color) {
+fn restore_status_style(status: &crate::restore::RestoreStatus) -> (&'static str, Color) {
+    use crate::restore::RestoreStatus;
     match status {
-        "pending" => ("pending".to_string(), YELLOW),
-        "available" => ("available".to_string(), GREEN),
-        "downloaded" => ("downloaded".to_string(), CYAN),
-        "failed" => ("failed".to_string(), RED),
-        "cancelled" => ("cancelled".to_string(), DIM),
-        other => (other.to_string(), DIM),
+        RestoreStatus::Pending => ("pending", YELLOW),
+        RestoreStatus::Available => ("available", GREEN),
+        RestoreStatus::Downloaded => ("downloaded", CYAN),
+        RestoreStatus::Failed => ("failed", RED),
+        RestoreStatus::Cancelled => ("cancelled", DIM),
     }
 }
 
@@ -454,9 +455,9 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
             format!(" {}", msg),
             Style::default().fg(color),
         ))
-    } else if app.tab == Tab::Browse && !app.bucket.is_empty() {
+    } else if app.tab == Tab::Browse && !app.state.bucket.is_empty() {
         Line::from(Span::styled(
-            format!(" {}:/{}", app.bucket, app.prefix),
+            format!(" {}:/{}", app.state.bucket, app.state.prefix),
             Style::default().fg(DIM),
         ))
     } else if app.tab == Tab::Profiles {
@@ -468,7 +469,7 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
         let pending = app
             .restores
             .iter()
-            .filter(|r| r.status == "pending")
+            .filter(|r| r.status == crate::restore::RestoreStatus::Pending)
             .count();
         let daemon_indicator = if crate::daemon::is_running() {
             " — daemon active"
@@ -523,6 +524,9 @@ fn draw_keybindings(f: &mut Frame, app: &App, area: Rect) {
         }
         Mode::Upload { .. } => {
             vec![("tab", "next"), ("enter", "upload"), ("esc", "cancel")]
+        }
+        Mode::ScpPicker { .. } => {
+            vec![("↑↓", "host"), ("enter", "send"), ("esc", "cancel")]
         }
         Mode::Rename { .. } => vec![("enter", "save"), ("esc", "cancel")],
         Mode::LibraryInfo { .. } => vec![("esc", "close")],
@@ -596,7 +600,13 @@ fn draw_keybindings(f: &mut Frame, app: &App, area: Rect) {
                 (".", "more"),
                 ("q", "quit"),
             ],
-            (Tab::Library, true) => vec![("R", "refresh"), ("?", "help"), (".", "back")],
+            (Tab::Library, true) => vec![
+                ("l", "presign URL"),
+                ("c", "scp to"),
+                ("R", "refresh"),
+                ("?", "help"),
+                (".", "back"),
+            ],
         },
     };
 
@@ -651,7 +661,7 @@ fn draw_bucket_picker(f: &mut Frame, app: &App) {
         .iter()
         .enumerate()
         .map(|(i, b)| {
-            let label = if *b == app.bucket {
+            let label = if *b == app.state.bucket {
                 format!("* {}", b)
             } else {
                 format!("  {}", b)
@@ -746,7 +756,7 @@ fn draw_detail(f: &mut Frame, app: &App) {
     if !info.etag.is_empty() {
         lines.push(field("ETag", &info.etag));
     }
-    if cache::is_cached(&app.bucket, &info.key) {
+    if cache::is_cached(&app.state.bucket, &info.key) {
         lines.push(Line::from(vec![
             Span::styled(format!("{:>12}  ", "Cache"), Style::default().fg(DIM)),
             Span::styled("● cached", Style::default().fg(GREEN)),
@@ -830,7 +840,7 @@ fn draw_upload_form(f: &mut Frame, app: &App) {
     let comp_height = completions.len().min(max_comp) as u16;
     let form_height = 7 + if comp_height > 0 { comp_height + 1 } else { 0 };
 
-    let title = format!("Upload to s3://{}/", app.bucket);
+    let title = format!("Upload to s3://{}/", app.state.bucket);
     let area = fixed_centered_rect(65, form_height, f.area());
     let inner = draw_overlay_block(f, &title, area);
 
@@ -892,6 +902,53 @@ fn draw_upload_form(f: &mut Frame, app: &App) {
             .collect();
         f.render_widget(Paragraph::new(visible), comp_area);
     }
+}
+
+fn draw_scp_picker(f: &mut Frame, app: &App) {
+    let Mode::ScpPicker {
+        hosts,
+        selected,
+        dest,
+        cached_path: _,
+    } = &app.mode
+    else {
+        return;
+    };
+
+    let visible = hosts.len().min(10);
+    let height = (visible as u16) + 6; // title + hosts + blank + dest label + dest field + padding
+    let area = fixed_centered_rect(55, height, f.area());
+    let inner = draw_overlay_block(f, "SCP — send to:", area);
+
+    let mut constraints: Vec<Constraint> = Vec::new();
+    for _ in 0..visible {
+        constraints.push(Constraint::Length(1));
+    }
+    constraints.push(Constraint::Length(1)); // blank
+    constraints.push(Constraint::Length(1)); // dest label
+    constraints.push(Constraint::Length(1)); // dest input
+
+    let chunks = Layout::vertical(constraints).split(inner);
+
+    for (i, host) in hosts.iter().take(visible).enumerate() {
+        let style = if i == *selected {
+            Style::default().bg(SELECT_BG).fg(Color::White)
+        } else {
+            Style::default().fg(DIM)
+        };
+        let marker = if i == *selected { "▸ " } else { "  " };
+        let line = Line::styled(format!("{}{}", marker, host), style);
+        f.render_widget(Paragraph::new(line), chunks[i]);
+    }
+
+    let dest_label = Line::from(Span::styled("  Dest:", Style::default().fg(CYAN)));
+    f.render_widget(Paragraph::new(dest_label), chunks[visible + 1]);
+
+    let dest_line = Line::from(Span::styled(
+        format!("  {}_", dest),
+        Style::default().fg(Color::White),
+    ));
+    f.render_widget(Paragraph::new(dest_line), chunks[visible + 2]);
 }
 
 fn draw_profile_form(f: &mut Frame, app: &App, title: &str) {
@@ -1034,6 +1091,11 @@ fn draw_help(f: &mut Frame) {
         ("p", "Image preview"),
         ("/", "Filter"),
         ("", ""),
+        ("", "── Library . submenu ──"),
+        ("l", "Copy presigned URL to clipboard"),
+        ("c", "SCP file to another host"),
+        ("R", "Refresh library"),
+        ("", ""),
         (".", "Toggle submenu"),
         ("?", "This help"),
         ("q", "Quit (saves state)"),
@@ -1067,7 +1129,7 @@ fn draw_image_preview(f: &mut Frame, app: &mut App) {
         return;
     };
     let name = key.rsplit('/').next().unwrap_or(key).to_string();
-    let cached = cache::is_cached(&app.bucket, key);
+    let cached = cache::is_cached(&app.state.bucket, key);
 
     let area = f.area();
     f.render_widget(Clear, area);

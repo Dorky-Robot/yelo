@@ -217,7 +217,6 @@ pub fn delete_profile(name: &str) -> Result<()> {
 }
 
 /// Read profile details (access key, region) for pre-filling edit form.
-#[allow(dead_code)]
 pub fn read_profile_detail(name: &str) -> (String, String) {
     let dir = aws_dir();
     let access_key =

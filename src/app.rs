@@ -10,7 +10,7 @@ use crate::cache;
 use crate::config::Config;
 use crate::credentials;
 use crate::log;
-use crate::restore::{self, RestoreNotification};
+use crate::restore::{self, RestoreNotification, RestoreStatus};
 use crate::state::State;
 use crate::{aws_ops, credentials as creds};
 
@@ -93,6 +93,12 @@ pub enum Mode {
         completions: Vec<String>,
         comp_selected: Option<usize>,
     },
+    ScpPicker {
+        hosts: Vec<String>,
+        selected: usize,
+        dest: String,
+        cached_path: String,
+    },
 }
 
 pub enum BgResult {
@@ -141,7 +147,7 @@ pub enum BgResult {
     },
     RestoreChecked {
         id: String,
-        new_status: String,
+        new_status: Option<RestoreStatus>,
         err: Option<String>,
     },
     RestoresLoaded {
@@ -159,6 +165,15 @@ pub enum BgResult {
         key: String,
         err: Option<String>,
     },
+    PresignedUrl {
+        url: String,
+        err: Option<String>,
+    },
+    ScpComplete {
+        name: String,
+        host: String,
+        err: Option<String>,
+    },
 }
 
 pub struct App {
@@ -170,8 +185,6 @@ pub struct App {
     pub should_quit: bool,
 
     // Browse
-    pub bucket: String,
-    pub prefix: String,
     pub items: Vec<ObjectInfo>,
     pub browse_selected: usize,
     pub browse_scroll: usize,
@@ -211,14 +224,12 @@ pub struct App {
 impl App {
     pub fn new(picker: Picker) -> Self {
         let config = Config::load().unwrap_or_default();
-        let state = State::load().unwrap_or_default();
+        let mut state = State::load().unwrap_or_default();
         let (tx, rx) = mpsc::channel();
 
-        let bucket = if !state.bucket.is_empty() {
-            state.bucket.clone()
-        } else {
-            config.resolve_bucket().unwrap_or_default()
-        };
+        if state.bucket.is_empty() {
+            state.bucket = config.resolve_bucket().unwrap_or_default();
+        }
 
         let mut app = App {
             config,
@@ -227,8 +238,6 @@ impl App {
             mode: Mode::Normal,
             submenu: false,
             should_quit: false,
-            bucket: bucket.clone(),
-            prefix: String::new(),
             items: Vec::new(),
             browse_selected: 0,
             browse_scroll: 0,
@@ -254,22 +263,17 @@ impl App {
             bg_rx: rx,
         };
 
-        if !app.state.prefix.is_empty() {
-            app.prefix = app.state.prefix.clone();
-        }
-
         log::log(&format!(
             "App::new bucket={:?} prefix={:?} config.region={:?} config.profile={:?}",
-            app.bucket, app.prefix, app.config.region, app.config.profile
+            app.state.bucket, app.state.prefix, app.config.region, app.config.profile
         ));
 
-        // Kick off initial load
-        if bucket.is_empty() {
+        if app.state.bucket.is_empty() {
             log::log("No bucket set, loading bucket list");
             app.loading = Some("Loading buckets...".into());
             app.spawn_list_buckets();
         } else {
-            log::log(&format!("Loading objects for bucket {:?}", bucket));
+            log::log(&format!("Loading objects for bucket {:?}", app.state.bucket));
             app.loading = Some("Loading...".into());
             app.spawn_list_objects();
         }
@@ -404,10 +408,10 @@ impl App {
                 } => {
                     if let Some(e) = err {
                         self.flash(format!("Check failed: {}", e));
-                    } else {
-                        let _ = restore::update_status(&id, &new_status, None);
+                    } else if let Some(status) = new_status {
+                        self.flash(format!("{}: {}", id, status));
+                        let _ = restore::update_status(&id, status, None);
                         self.restores = restore::list_requests();
-                        self.flash(format!("{}: {}", id, new_status));
                     }
                 }
                 BgResult::RestoresLoaded { restores } => {
@@ -419,7 +423,7 @@ impl App {
                         self.flash(format!("Cache failed: {}", e));
                     } else {
                         let name = key.rsplit('/').next().unwrap_or(&key);
-                        let _ = cache::open_cached(&self.bucket, &key);
+                        let _ = cache::open_cached(&self.state.bucket, &key);
                         self.flash(format!("Opened {}", name));
                     }
                 }
@@ -451,6 +455,21 @@ impl App {
                         self.spawn_list_objects();
                     }
                 }
+                BgResult::PresignedUrl { url, err } => {
+                    if let Some(e) = err {
+                        self.flash(format!("Presign failed: {}", e));
+                    } else {
+                        let _ = cache::copy_string_to_clipboard(&url);
+                        self.flash("Presigned URL copied to clipboard".into());
+                    }
+                }
+                BgResult::ScpComplete { name, host, err } => {
+                    if let Some(e) = err {
+                        self.flash(format!("SCP failed: {}", e));
+                    } else {
+                        self.flash(format!("Sent {} to {}", name, host));
+                    }
+                }
             }
         }
     }
@@ -465,9 +484,7 @@ impl App {
         self.status_expires = None; // stays until next action
     }
 
-    pub fn save_state(&mut self) {
-        self.state.bucket = self.bucket.clone();
-        self.state.prefix = self.prefix.clone();
+    pub fn save_state(&self) {
         let _ = self.state.save();
     }
 
@@ -481,7 +498,7 @@ impl App {
             self.items
                 .iter()
                 .filter(|item| {
-                    let name = display_name(&item.key, &self.prefix).to_lowercase();
+                    let name = display_name(&item.key, &self.state.prefix).to_lowercase();
                     name.contains(&lower)
                 })
                 .collect()
@@ -564,12 +581,18 @@ impl App {
 
     // --- Background spawns ---
 
-    pub fn spawn_list_objects(&self) {
-        let tx = self.bg_tx.clone();
-        let bucket = self.bucket.clone();
-        let prefix = self.prefix.clone();
+    /// Clone bucket, region, and profile for use in a background thread.
+    fn aws_ctx(&self) -> (String, String, String) {
+        let bucket = self.state.bucket.clone();
         let region = self.config.resolve_region(&bucket);
         let profile = self.config.resolve_profile(&bucket);
+        (bucket, region, profile)
+    }
+
+    pub fn spawn_list_objects(&self) {
+        let tx = self.bg_tx.clone();
+        let (bucket, region, profile) = self.aws_ctx();
+        let prefix = self.state.prefix.clone();
         std::thread::spawn(move || {
             let result = aws_ops::list_objects(&bucket, &prefix, &region, &profile);
             let _ = tx.send(match result {
@@ -584,10 +607,8 @@ impl App {
 
     pub fn spawn_head_object(&self, key: &str) {
         let tx = self.bg_tx.clone();
-        let bucket = self.bucket.clone();
+        let (bucket, region, profile) = self.aws_ctx();
         let key = key.to_string();
-        let region = self.config.resolve_region(&bucket);
-        let profile = self.config.resolve_profile(&bucket);
         std::thread::spawn(move || {
             let result = aws_ops::head_object(&bucket, &key, &region, &profile);
             let _ = tx.send(match result {
@@ -626,10 +647,8 @@ impl App {
 
     pub fn spawn_download(&self, key: &str) {
         let tx = self.bg_tx.clone();
-        let bucket = self.bucket.clone();
+        let (bucket, region, profile) = self.aws_ctx();
         let key = key.to_string();
-        let region = self.config.resolve_region(&bucket);
-        let profile = self.config.resolve_profile(&bucket);
         std::thread::spawn(move || {
             let result = aws_ops::download(&bucket, &key, &region, &profile);
             let _ = tx.send(match result {
@@ -649,18 +668,70 @@ impl App {
 
     pub fn spawn_upload(&self, local_path: &str, key: &str, storage_class: &str) {
         let tx = self.bg_tx.clone();
-        let bucket = self.bucket.clone();
+        let (bucket, region, profile) = self.aws_ctx();
         let key = key.to_string();
         let local = std::path::PathBuf::from(local_path);
         let sc = storage_class.to_string();
-        let region = self.config.resolve_region(&bucket);
-        let profile = self.config.resolve_profile(&bucket);
         std::thread::spawn(move || {
             let result = aws_ops::upload(&bucket, &key, &local, &sc, &region, &profile);
             let _ = tx.send(match result {
                 Ok(()) => BgResult::UploadComplete { key, err: None },
                 Err(e) => BgResult::UploadComplete {
                     key,
+                    err: Some(e.to_string()),
+                },
+            });
+        });
+    }
+
+    pub fn spawn_presign(&self, bucket: &str, key: &str) {
+        let tx = self.bg_tx.clone();
+        let bucket = bucket.to_string();
+        let key = key.to_string();
+        let region = self.config.resolve_region(&self.state.bucket);
+        let profile = self.config.resolve_profile(&self.state.bucket);
+        std::thread::spawn(move || {
+            let result = aws_ops::presign_get(&bucket, &key, 3600, &region, &profile);
+            let _ = tx.send(match result {
+                Ok(url) => BgResult::PresignedUrl { url, err: None },
+                Err(e) => BgResult::PresignedUrl {
+                    url: String::new(),
+                    err: Some(e.to_string()),
+                },
+            });
+        });
+    }
+
+    pub fn spawn_scp(&self, local_path: &str, host: &str, dest: &str) {
+        let tx = self.bg_tx.clone();
+        let local_path = local_path.to_string();
+        let host = host.to_string();
+        let dest = dest.to_string();
+        let name = std::path::Path::new(&local_path)
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        std::thread::spawn(move || {
+            let remote = format!("{}:{}", host, dest);
+            let output = std::process::Command::new("scp")
+                .arg(&local_path)
+                .arg(&remote)
+                .output();
+            let _ = tx.send(match output {
+                Ok(o) if o.status.success() => BgResult::ScpComplete {
+                    name,
+                    host,
+                    err: None,
+                },
+                Ok(o) => BgResult::ScpComplete {
+                    name,
+                    host,
+                    err: Some(String::from_utf8_lossy(&o.stderr).trim().to_string()),
+                },
+                Err(e) => BgResult::ScpComplete {
+                    name,
+                    host,
                     err: Some(e.to_string()),
                 },
             });
@@ -740,10 +811,8 @@ impl App {
 
     pub fn spawn_submit_restore(&self, key: &str, tier: &str, storage_class: &str) {
         let tx = self.bg_tx.clone();
-        let bucket = self.bucket.clone();
+        let (bucket, region, profile) = self.aws_ctx();
         let key = key.to_string();
-        let region = self.config.resolve_region(&bucket);
-        let profile = self.config.resolve_profile(&bucket);
         let tier = tier.to_string();
         let storage_class = storage_class.to_string();
         std::thread::spawn(move || {
@@ -770,12 +839,12 @@ impl App {
             let _ = tx.send(match result {
                 Ok(new_status) => BgResult::RestoreChecked {
                     id: req.id,
-                    new_status,
+                    new_status: Some(new_status),
                     err: None,
                 },
                 Err(e) => BgResult::RestoreChecked {
                     id: req.id,
-                    new_status: String::new(),
+                    new_status: None,
                     err: Some(e.to_string()),
                 },
             });
@@ -783,7 +852,7 @@ impl App {
     }
 
     pub fn load_image_preview(&mut self, key: &str) -> bool {
-        let path = cache::cached_path(&self.bucket, key);
+        let path = cache::cached_path(&self.state.bucket, key);
         self.load_image_preview_from_path(&path)
     }
 
@@ -810,10 +879,8 @@ impl App {
 
     pub fn spawn_cache_and_open(&self, key: &str) {
         let tx = self.bg_tx.clone();
-        let bucket = self.bucket.clone();
+        let (bucket, region, profile) = self.aws_ctx();
         let key = key.to_string();
-        let region = self.config.resolve_region(&bucket);
-        let profile = self.config.resolve_profile(&bucket);
         std::thread::spawn(move || {
             // Check cache first
             if cache::is_cached(&bucket, &key) {
@@ -833,10 +900,8 @@ impl App {
 
     pub fn spawn_cache_for_preview(&self, key: &str) {
         let tx = self.bg_tx.clone();
-        let bucket = self.bucket.clone();
+        let (bucket, region, profile) = self.aws_ctx();
         let key = key.to_string();
-        let region = self.config.resolve_region(&bucket);
-        let profile = self.config.resolve_profile(&bucket);
         std::thread::spawn(move || {
             if cache::is_cached(&bucket, &key) {
                 let _ = tx.send(BgResult::CacheForPreview { key, err: None });
@@ -866,21 +931,22 @@ impl App {
         std::thread::spawn(move || {
             let restores = restore::list_requests();
             for req in &restores {
-                if req.status != "pending" {
+                if req.status != RestoreStatus::Pending {
                     continue;
                 }
-                let result = restore::check_restore(req);
-                match result {
+                match restore::check_restore(req) {
                     Ok(new_status) => {
-                        let _ = restore::update_status(&req.id, &new_status, None);
+                        let _ = restore::update_status(&req.id, new_status, None);
                     }
                     Err(e) => {
-                        // Still update last_checked_at even on error
-                        let _ = restore::update_status(&req.id, &req.status, Some(&e.to_string()));
+                        let _ = restore::update_status(
+                            &req.id,
+                            req.status.clone(),
+                            Some(&e.to_string()),
+                        );
                     }
                 }
             }
-            // Reload after all checks
             let restores = restore::list_requests();
             let _ = tx.send(BgResult::RestoresLoaded { restores });
         });
@@ -920,13 +986,8 @@ impl App {
     }
 }
 
-pub fn display_name<'a>(key: &'a str, prefix: &str) -> &'a str {
-    let name = key.strip_prefix(prefix).unwrap_or(key);
-    if name.is_empty() { key } else { name }
-}
-
 // Re-export shared helpers so existing TUI code and tests keep working.
-pub use crate::helpers::{format_size, is_glacier};
+pub use crate::helpers::{display_name, format_size, is_glacier};
 
 pub fn storage_class_label(class: &str) -> &str {
     match class {

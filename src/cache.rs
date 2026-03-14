@@ -153,20 +153,21 @@ pub fn rename_cached(bucket: &str, old_key: &str, new_name: &str) -> Result<Stri
     Ok(new_key)
 }
 
-pub fn copy_path_to_clipboard(path: &std::path::Path) -> Result<()> {
-    let path_str = path.to_string_lossy();
+pub fn copy_string_to_clipboard(s: &str) -> Result<()> {
     let mut child = std::process::Command::new("pbcopy")
         .stdin(std::process::Stdio::piped())
         .spawn()
         .context("running pbcopy")?;
     if let Some(mut stdin) = child.stdin.take() {
         use std::io::Write;
-        stdin
-            .write_all(path_str.as_bytes())
-            .context("writing to pbcopy")?;
+        stdin.write_all(s.as_bytes()).context("writing to pbcopy")?;
     }
     child.wait().context("waiting for pbcopy")?;
     Ok(())
+}
+
+pub fn copy_path_to_clipboard(path: &std::path::Path) -> Result<()> {
+    copy_string_to_clipboard(&path.to_string_lossy())
 }
 
 #[cfg(test)]

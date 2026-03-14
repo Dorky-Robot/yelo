@@ -2,18 +2,13 @@
 use std::io::{self, IsTerminal, Write};
 
 use crate::aws_ops::ObjectInfo;
-use crate::helpers::format_size;
+use crate::helpers::{display_name, format_size};
 
 pub fn is_tty() -> bool {
     io::stdout().is_terminal()
 }
 
-/// Display name: strip the prefix to show just the relative part.
-fn display_name(key: &str, prefix: &str) -> String {
-    key.strip_prefix(prefix).unwrap_or(key).to_string()
-}
-
-/// Storage class short label.
+/// Storage class short label for CLI output.
 fn class_label(class: &str) -> &str {
     match class {
         "STANDARD" => "STD",

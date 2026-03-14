@@ -383,6 +383,30 @@ pub fn upload(
     })
 }
 
+pub fn presign_get(
+    bucket: &str,
+    key: &str,
+    expires_secs: u64,
+    region: &str,
+    profile: &str,
+) -> Result<String> {
+    blocking(async {
+        let client = make_client(region, profile).await?;
+        let presign_config = aws_sdk_s3::presigning::PresigningConfig::expires_in(
+            std::time::Duration::from_secs(expires_secs),
+        )
+        .context("invalid presign duration")?;
+        let presigned = client
+            .get_object()
+            .bucket(bucket)
+            .key(key)
+            .presigned(presign_config)
+            .await
+            .context("generating presigned URL")?;
+        Ok(presigned.uri().to_string())
+    })
+}
+
 pub fn test_profile(region: &str, profile: &str) -> Result<()> {
     blocking(async {
         let client = make_client(region, profile).await?;

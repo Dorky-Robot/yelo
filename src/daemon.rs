@@ -11,7 +11,7 @@ use std::time::SystemTime;
 
 use anyhow::{Context, Result};
 
-use crate::{cache, config::Config, restore};
+use crate::{cache, config::Config, restore, restore::RestoreStatus};
 
 fn yelo_dir() -> PathBuf {
     dirs::home_dir()
@@ -119,7 +119,10 @@ pub fn run_loop() -> Result<()> {
 
 fn poll_restores() {
     let restores = restore::list_requests();
-    let pending: Vec<_> = restores.iter().filter(|r| r.status == "pending").collect();
+    let pending: Vec<_> = restores
+        .iter()
+        .filter(|r| r.status == RestoreStatus::Pending)
+        .collect();
 
     if pending.is_empty() {
         return;
@@ -129,13 +132,13 @@ fn poll_restores() {
 
     for req in pending {
         match restore::check_restore(req) {
-            Ok(status) if status == "available" => {
+            Ok(RestoreStatus::Available) => {
                 daemon_log(&format!("{}: available, downloading {}", req.id, req.key));
-                let _ = restore::update_status(&req.id, "available", None);
+                let _ = restore::update_status(&req.id, RestoreStatus::Available, None);
 
                 match cache::download_to_cache(&req.bucket, &req.key, &req.region, &req.profile) {
                     Ok(_) => {
-                        let _ = restore::update_status(&req.id, "downloaded", None);
+                        let _ = restore::update_status(&req.id, RestoreStatus::Downloaded, None);
                         daemon_log(&format!("{}: downloaded", req.id));
                     }
                     Err(e) => {
