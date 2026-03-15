@@ -7,7 +7,9 @@ pub fn is_glacier(class: &str) -> bool {
 
 /// Check if a key looks like an image file.
 pub fn is_image(key: &str) -> bool {
-    const EXTS: &[&str] = &[".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff", ".tif"];
+    const EXTS: &[&str] = &[
+        ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff", ".tif",
+    ];
     let lower = key.to_lowercase();
     EXTS.iter().any(|ext| lower.ends_with(ext))
 }

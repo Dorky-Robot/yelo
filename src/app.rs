@@ -273,7 +273,10 @@ impl App {
             app.loading = Some("Loading buckets...".into());
             app.spawn_list_buckets();
         } else {
-            log::log(&format!("Loading objects for bucket {:?}", app.state.bucket));
+            log::log(&format!(
+                "Loading objects for bucket {:?}",
+                app.state.bucket
+            ));
             app.loading = Some("Loading...".into());
             app.spawn_list_objects();
         }
