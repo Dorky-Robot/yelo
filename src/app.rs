@@ -686,10 +686,9 @@ impl App {
 
     pub fn spawn_presign(&self, bucket: &str, key: &str) {
         let tx = self.bg_tx.clone();
+        let (_, region, profile) = self.aws_ctx();
         let bucket = bucket.to_string();
         let key = key.to_string();
-        let region = self.config.resolve_region(&self.state.bucket);
-        let profile = self.config.resolve_profile(&self.state.bucket);
         std::thread::spawn(move || {
             let result = aws_ops::presign_get(&bucket, &key, 3600, &region, &profile);
             let _ = tx.send(match result {

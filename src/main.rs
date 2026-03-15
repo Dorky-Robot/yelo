@@ -693,13 +693,12 @@ fn handle_library_submenu(app: &mut App, code: KeyCode) {
                 let mut hosts = parse_ssh_hosts();
                 let hn = hostname();
                 if !hn.is_empty() && !hosts.contains(&hn) {
-                    hosts.push(hn);
+                    hosts.push(hn.clone());
                 }
                 if hosts.is_empty() {
                     app.flash("No SSH hosts found".into());
                 } else {
-                    // Pre-select current hostname if found
-                    let selected = hosts.iter().position(|h| h == &hostname()).unwrap_or(0);
+                    let selected = hosts.iter().position(|h| h == &hn).unwrap_or(0);
                     app.mode = Mode::ScpPicker {
                         hosts,
                         selected,
