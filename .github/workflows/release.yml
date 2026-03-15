@@ -52,3 +52,81 @@ jobs:
             --title "${{ github.ref_name }}" \
             --generate-notes \
             yelo-*.tar.gz
+
+  update-tap:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Compute SHA256 sums
+        run: |
+          for f in yelo-*.tar.gz; do
+            target=$(echo "$f" | sed 's/yelo-//' | sed 's/\.tar\.gz//' | tr '-' '_')
+            sha=$(sha256sum "$f" | cut -d' ' -f1)
+            echo "SHA_${target}=${sha}" >> "$GITHUB_ENV"
+          done
+
+      - name: Checkout tap repo
+        uses: actions/checkout@v4
+        with:
+          repository: dorky-robot/homebrew-tap
+          token: ${{ secrets.TAP_GITHUB_TOKEN }}
+          path: homebrew-tap
+
+      - name: Update formula
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          TAG="${GITHUB_REF_NAME}"
+          BASE="https://github.com/Dorky-Robot/yelo/releases/download/${TAG}"
+
+          mkdir -p homebrew-tap/Formula
+          cat > homebrew-tap/Formula/yelo.rb << FORMULA
+          class Yelo < Formula
+            desc "FTP-style CLI and TUI for Amazon S3 and Glacier"
+            homepage "https://github.com/Dorky-Robot/yelo"
+            version "${VERSION}"
+            license "MIT"
+
+            on_macos do
+              on_arm do
+                url "${BASE}/yelo-aarch64-apple-darwin.tar.gz"
+                sha256 "${SHA_aarch64_apple_darwin}"
+              end
+
+              on_intel do
+                url "${BASE}/yelo-x86_64-apple-darwin.tar.gz"
+                sha256 "${SHA_x86_64_apple_darwin}"
+              end
+            end
+
+            on_linux do
+              on_arm do
+                url "${BASE}/yelo-aarch64-unknown-linux-gnu.tar.gz"
+                sha256 "${SHA_aarch64_unknown_linux_gnu}"
+              end
+
+              on_intel do
+                url "${BASE}/yelo-x86_64-unknown-linux-gnu.tar.gz"
+                sha256 "${SHA_x86_64_unknown_linux_gnu}"
+              end
+            end
+
+            def install
+              bin.install "yelo"
+            end
+
+            test do
+              assert_match "yelo", shell_output("#{bin}/yelo --help")
+            end
+          end
+          FORMULA
+
+          cd homebrew-tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/yelo.rb
+          git commit -m "yelo ${VERSION}"
+          git push
