@@ -3,7 +3,7 @@ BINDIR ?= $(PREFIX)/bin
 MANDIR ?= $(PREFIX)/share/man/man1
 VERSION := $(shell grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
 
-.PHONY: build release install uninstall test lint clean setup
+.PHONY: build release install uninstall test lint clean setup cut-release
 
 build:
 	cargo build
@@ -35,3 +35,6 @@ clean:
 setup:
 	git config core.hooksPath hooks
 	@echo "git hooks configured"
+
+cut-release:
+	@scripts/release.sh $(BUMP)
